@@ -75,11 +75,12 @@ a { color: inherit; }
 .avatar-frame-picker-heading .icon-button:disabled { opacity: .4; cursor: default; }
 .avatar-frame-current-row { display: flex; align-items: center; gap: 12px; margin: 14px 0 2px; }
 .avatar-frame-preview { position: relative; width: 72px; height: 72px; flex: 0 0 auto; overflow: hidden; border: 1px solid #d9dcd6; background-color: #e5e7df; background-image: conic-gradient(#daddd4 25%, #f2f2ee 0 50%, #daddd4 0 75%, #f2f2ee 0); background-size: 14px 14px; }
-.avatar-frame-portrait, .avatar-frame-overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.avatar-frame-portrait, .avatar-frame-overlay { position: absolute; inset: 9%; width: 82%; height: 82%; object-fit: contain; }
 .avatar-frame-portrait { object-fit: cover; }
-.avatar-frame-overlay-picture { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
-.avatar-frame-overlay { width: 100%; height: 100%; object-fit: contain; transform: scale(1.22); transform-origin: center; }
-.avatar-frame-results { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.avatar-frame-overlay-picture { position: absolute; inset: 9%; width: 82%; height: 82%; z-index: 1; }
+.avatar-frame-overlay { transform: scale(1.22); transform-origin: center; }
+.avatar-frame-overlay-picture .avatar-frame-overlay { inset: 0; width: 100%; height: 100%; }
+.avatar-frame-results { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
 .avatar-frame-option { min-width: 0; display: grid; align-content: start; gap: 6px; padding: 6px; border: 1px solid #d9dcd6; background: #fff; color: #414b45; text-align: left; cursor: pointer; }
 .avatar-frame-option:hover { border-color: #9dac77; }
 .avatar-frame-option.is-selected { border-color: #7e9b3d; box-shadow: inset 0 0 0 1px #7e9b3d; }
@@ -87,7 +88,6 @@ a { color: inherit; }
 .avatar-frame-option-name { min-width: 0; overflow: hidden; font-size: 10px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .avatar-frame-animation-mark { color: #718445; font-family: var(--mono); font-size: 8px; }
 .avatar-frame-dialog .background-search { margin-top: 15px; }
-.avatar-frame-dialog .avatar-frame-option-preview .avatar-frame-overlay-picture { inset: 0; width: 100%; height: 100%; }
 .background-picker { margin-top: 25px; padding-top: 17px; border-top: 1px solid var(--line); }
 .background-picker-heading { display: flex; align-items: center; justify-content: space-between; }
 .background-picker-heading .icon-button:disabled { opacity: .4; cursor: default; }
