@@ -25,6 +25,71 @@ type SteamMarketResponse = {
   results?: SteamMarketItem[];
 };
 
+type SteamPointShopDefinition = {
+  appid?: number;
+  defid?: number;
+  active?: boolean;
+  community_item_class?: number;
+  community_item_data?: {
+    item_name?: string;
+    item_title?: string;
+    item_image_large?: string;
+    item_movie_webm?: string;
+    item_movie_mp4?: string;
+    animated?: boolean;
+  };
+};
+
+type SteamPointShopResponse = {
+  response?: {
+    responses?: Array<{
+      eresult?: number;
+      response?: {
+        total_count?: number;
+        next_cursor?: string;
+        definitions?: SteamPointShopDefinition[];
+      };
+    }>;
+  };
+};
+
+const pointsShopCache = new Map<string, { expiresAt: number; payload: object }>();
+
+function encodeVarint(value: number): Buffer {
+  const bytes: number[] = [];
+  while (value > 0x7f) {
+    bytes.push((value & 0x7f) | 0x80);
+    value >>>= 7;
+  }
+  bytes.push(value);
+  return Buffer.from(bytes);
+}
+
+function encodeNumberField(field: number, value: number): Buffer {
+  return Buffer.concat([encodeVarint(field << 3), encodeVarint(value)]);
+}
+
+function encodeStringField(field: number, value: string): Buffer {
+  const bytes = Buffer.from(value, 'utf8');
+  return Buffer.concat([encodeVarint((field << 3) | 2), encodeVarint(bytes.length), bytes]);
+}
+
+function makePointsShopQuery(cursor?: string): string {
+  const query = Buffer.concat([
+    encodeNumberField(3, 3),
+    encodeStringField(4, 'english'),
+    encodeNumberField(5, 20),
+    ...(cursor ? [encodeStringField(6, cursor)] : []),
+    encodeNumberField(7, 2),
+    encodeNumberField(8, 0),
+    encodeNumberField(9, 1),
+    encodeNumberField(12, 1),
+    encodeNumberField(17, 3),
+    encodeNumberField(17, 4),
+  ]);
+  return Buffer.concat([encodeVarint(10), encodeVarint(query.length), query]).toString('base64');
+}
+
 app.use(express.json({ limit: '4kb' }));
 
 app.get('/api/backgrounds', async (request, response) => {
@@ -80,6 +145,69 @@ app.get('/api/backgrounds', async (request, response) => {
     response.json({ items, totalCount: pages[0].data.total_count || 0, pageSize: count });
   } catch {
     response.status(502).json({ error: 'Steam could not load profile backgrounds right now.' });
+  }
+});
+
+app.get('/api/points-backgrounds', async (request, response) => {
+  const cursor = typeof request.query.cursor === 'string' ? request.query.cursor : '';
+  if (cursor && (cursor.length > 128 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cursor))) {
+    response.status(400).json({ error: 'Invalid Points Shop page cursor.' });
+    return;
+  }
+
+  const cacheKey = cursor || 'first';
+  const cached = pointsShopCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    response.setHeader('Cache-Control', 'public, max-age=300');
+    response.json(cached.payload);
+    return;
+  }
+
+  const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
+  apiUrl.searchParams.set('origin', 'https://store.steampowered.com');
+  apiUrl.searchParams.set('input_protobuf_encoded', makePointsShopQuery(cursor || undefined));
+  apiUrl.searchParams.set('format', 'json');
+
+  try {
+    const result = await axios.get<SteamPointShopResponse>(apiUrl.href, {
+      timeout: 15000,
+      headers: { Accept: 'application/json' },
+    });
+    const pointShopResponse = result.data.response?.responses?.find((entry) => entry.eresult === 1)?.response;
+    if (!pointShopResponse || !Array.isArray(pointShopResponse.definitions)) throw new Error('Steam returned an invalid Points Shop catalog.');
+
+    const items = pointShopResponse.definitions.flatMap((definition) => {
+      const data = definition.community_item_data;
+      const appid = definition.appid;
+      const image = data?.item_image_large;
+      if (!definition.active || definition.community_item_class !== 3 || !data?.animated || !appid || !definition.defid || !image) return [];
+
+      const assetBase = `https://shared.fastly.steamstatic.com/community_assets/images/items/${appid}/`;
+      return [{
+        id: `points:${appid}:${definition.defid}`,
+        name: data.item_title || data.item_name || 'Animated profile background',
+        game: String(appid),
+        price: '',
+        imageUrl: `https://community.fastly.steamstatic.com/economy/profilebackground/items/${appid}/${image}?size=320x200`,
+        videoPoster: `${assetBase}${image}`,
+        marketUrl: 'https://store.steampowered.com/points/shop/c/backgrounds/cluster/1',
+        animated: true,
+        videoWebm: data.item_movie_webm ? `${assetBase}${data.item_movie_webm}` : undefined,
+        videoMp4: data.item_movie_mp4 ? `${assetBase}${data.item_movie_mp4}` : undefined,
+      }];
+    });
+
+    const payload = {
+      items,
+      totalCount: pointShopResponse.total_count || items.length,
+      pageSize: 20,
+      nextCursor: pointShopResponse.next_cursor || null,
+    };
+    pointsShopCache.set(cacheKey, { expiresAt: Date.now() + 300000, payload });
+    response.setHeader('Cache-Control', 'public, max-age=300');
+    response.json(payload);
+  } catch {
+    response.status(502).json({ error: 'Steam could not load animated Points Shop backgrounds right now.' });
   }
 });
 

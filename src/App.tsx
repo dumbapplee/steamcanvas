@@ -22,6 +22,7 @@ export default function App() {
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const sourceBackgroundStyle = useRef<string | null>(null);
+  const sourceBackgroundVideo = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!profile || !previewLoaded) return;
@@ -56,12 +57,49 @@ export default function App() {
 
     const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
     if (!page) return;
-    if (background) {
-      page.style.setProperty('background-image', `url("${background.imageUrl}")`, 'important');
-    } else if (sourceBackgroundStyle.current !== null) {
+    page.querySelectorAll('.profile_animated_background').forEach((element) => element.remove());
+    if (sourceBackgroundStyle.current !== null) {
       page.setAttribute('style', sourceBackgroundStyle.current);
     } else {
       page.removeAttribute('style');
+    }
+
+    if (background) {
+      if (background.animated && (background.videoWebm || background.videoMp4)) {
+        page.style.setProperty('background-image', 'none', 'important');
+        const wrapper = page.ownerDocument.createElement('div');
+        wrapper.className = 'profile_animated_background';
+        wrapper.dataset.steamcanvasBackgroundVideo = 'true';
+
+        const video = page.ownerDocument.createElement('video');
+        video.autoplay = true;
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.poster = background.videoPoster || background.imageUrl;
+        video.setAttribute('aria-hidden', 'true');
+
+        if (background.videoWebm) {
+          const source = page.ownerDocument.createElement('source');
+          source.src = background.videoWebm;
+          source.type = 'video/webm';
+          video.append(source);
+        }
+        if (background.videoMp4) {
+          const source = page.ownerDocument.createElement('source');
+          source.src = background.videoMp4;
+          source.type = 'video/mp4';
+          video.append(source);
+        }
+
+        wrapper.append(video);
+        page.prepend(wrapper);
+        void video.play().catch(() => {});
+      } else {
+        page.style.setProperty('background-image', `url("${background.imageUrl}")`, 'important');
+      }
+    } else if (sourceBackgroundVideo.current) {
+      page.prepend(sourceBackgroundVideo.current.cloneNode(true));
     }
   }, [background, previewLoaded, profile]);
 
@@ -77,6 +115,7 @@ export default function App() {
     setBackground(null);
     setSourceBackgroundImage('');
     sourceBackgroundStyle.current = null;
+    sourceBackgroundVideo.current = null;
 
     try {
       const response = await fetch('/api/profile', {
@@ -175,8 +214,11 @@ export default function App() {
                 srcDoc={profile.html}
                 onLoad={() => {
                   const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
+                  const animatedBackground = page?.querySelector<HTMLElement>('.profile_animated_background');
                   sourceBackgroundStyle.current = page?.getAttribute('style') ?? null;
-                  setSourceBackgroundImage(page ? getComputedStyle(page).backgroundImage : '');
+                  sourceBackgroundVideo.current = animatedBackground ? animatedBackground.cloneNode(true) as HTMLElement : null;
+                  const poster = animatedBackground?.querySelector<HTMLVideoElement>('video')?.poster;
+                  setSourceBackgroundImage(poster ? `url("${poster}")` : page ? getComputedStyle(page).backgroundImage : '');
                   setPreviewLoaded(true);
                 }}
               />

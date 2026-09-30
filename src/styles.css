@@ -104,6 +104,10 @@ a { color: inherit; }
 .background-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .background-dialog-header h2 { margin: 7px 0 0; font-size: 25px; font-weight: 600; }
 .background-dialog-header .background-selection { max-width: min(650px, 70vw); margin-top: 6px; }
+.background-source-tabs { display: flex; align-self: flex-start; gap: 4px; margin-top: 17px; padding: 3px; border: 1px solid #d9dcd6; background: #e9e9e3; }
+.background-source-tabs button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; border: 0; background: transparent; color: #65706a; font-size: 11px; cursor: pointer; }
+.background-source-tabs button:hover:not(.is-active) { color: var(--ink); background: rgb(255 255 255 / 65%); }
+.background-source-tabs button.is-active { background: #1c2425; color: #f7f8f3; }
 .background-search.is-large { height: 44px; flex: 0 0 auto; gap: 11px; margin-top: 19px; padding-left: 13px; }
 .background-search.is-large input { font-size: 13px; }
 .background-search.is-large button { width: 32px; height: 32px; }
@@ -201,6 +205,8 @@ a { color: inherit; }
   .background-dialog { width: calc(100vw - 20px); height: calc(100dvh - 20px); }
   .background-dialog-content { padding: 17px 14px 13px; }
   .background-dialog-header h2 { font-size: 21px; }
+  .background-source-tabs { width: 100%; }
+  .background-source-tabs button { min-width: 0; flex: 1; padding: 0 8px; font-size: 10px; }
   .background-results.is-expanded { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .background-option.is-large { padding: 4px; }
   .privacy-note, .panel-index { display: none; }
