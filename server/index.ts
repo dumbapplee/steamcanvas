@@ -30,16 +30,15 @@ app.use(express.json({ limit: '4kb' }));
 app.get('/api/backgrounds', async (request, response) => {
   const query = typeof request.query.query === 'string' ? request.query.query.trim().slice(0, 80) : '';
   const start = Number(request.query.start ?? 0);
-  const count = Number(request.query.count ?? 24);
-  if (!Number.isInteger(start) || start < 0 || start > 100000 || !Number.isInteger(count) || count < 1 || count > 50) {
+  const count = Number(request.query.count ?? 30);
+  if (!Number.isInteger(start) || start < 0 || start > 100000 || !Number.isInteger(count) || count < 1 || count > 30) {
     response.status(400).json({ error: 'Invalid background search page.' });
     return;
   }
 
   const marketUrl = new URL('/market/search/render/', `https://${steamHost}`);
   marketUrl.searchParams.set('query', query);
-  marketUrl.searchParams.set('start', String(start));
-  marketUrl.searchParams.set('count', String(count));
+  marketUrl.searchParams.set('count', '10');
   marketUrl.searchParams.set('search_descriptions', '0');
   marketUrl.searchParams.set('sort_column', 'popular');
   marketUrl.searchParams.set('sort_dir', 'desc');
@@ -48,16 +47,20 @@ app.get('/api/backgrounds', async (request, response) => {
   marketUrl.searchParams.set('norender', '1');
 
   try {
-    const result = await axios.get<SteamMarketResponse>(marketUrl.href, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
-        Accept: 'application/json',
-      },
-    });
-    if (!result.data.success || !Array.isArray(result.data.results)) throw new Error('Steam returned an invalid background catalog.');
+    const pages = await Promise.all(Array.from({ length: Math.ceil(count / 10) }, (_, index) => {
+      const pageUrl = new URL(marketUrl);
+      pageUrl.searchParams.set('start', String(start + index * 10));
+      return axios.get<SteamMarketResponse>(pageUrl.href, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+        },
+      });
+    }));
+    if (pages.some(({ data }) => !data.success || !Array.isArray(data.results))) throw new Error('Steam returned an invalid background catalog.');
 
-    const items = result.data.results.flatMap((item) => {
+    const items = pages.flatMap(({ data }) => data.results || []).flatMap((item) => {
       const description = item.asset_description;
       const hashName = item.hash_name || description?.market_hash_name;
       const iconUrl = description?.icon_url;
@@ -74,7 +77,7 @@ app.get('/api/backgrounds', async (request, response) => {
     });
 
     response.setHeader('Cache-Control', 'public, max-age=60');
-    response.json({ items, totalCount: result.data.total_count || 0, pageSize: count });
+    response.json({ items, totalCount: pages[0].data.total_count || 0, pageSize: count });
   } catch {
     response.status(502).json({ error: 'Steam could not load profile backgrounds right now.' });
   }

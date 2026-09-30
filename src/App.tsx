@@ -18,6 +18,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [avatarEdit, setAvatarEdit] = useState<AvatarEditState>(DEFAULT_AVATAR_EDIT);
   const [background, setBackground] = useState<SteamBackground | null>(null);
+  const [sourceBackgroundImage, setSourceBackgroundImage] = useState('');
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const sourceBackgroundStyle = useRef<string | null>(null);
@@ -74,6 +75,7 @@ export default function App() {
     setPreviewLoaded(false);
     setAvatarEdit(DEFAULT_AVATAR_EDIT);
     setBackground(null);
+    setSourceBackgroundImage('');
     sourceBackgroundStyle.current = null;
 
     try {
@@ -148,7 +150,7 @@ export default function App() {
           {profile && (
             <>
               <AvatarEditor sourceAvatar={profile.avatar} value={avatarEdit} onChange={setAvatarEdit} />
-              <BackgroundPicker value={background} onChange={setBackground} />
+              <BackgroundPicker sourceBackgroundImage={sourceBackgroundImage} value={background} onChange={setBackground} />
             </>
           )}
 
@@ -174,6 +176,7 @@ export default function App() {
                 onLoad={() => {
                   const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
                   sourceBackgroundStyle.current = page?.getAttribute('style') ?? null;
+                  setSourceBackgroundImage(page ? getComputedStyle(page).backgroundImage : '');
                   setPreviewLoaded(true);
                 }}
               />

@@ -39,7 +39,7 @@ Store the source URL separately from presentation settings. Future fit/crop/zoom
 
 ## Steam Market background catalog
 
-The background picker reads the Steam Community Market directly through `GET /api/backgrounds`. The server requests `/market/search/render/` for app `753`, filters item class `tag_item_class_3`, and returns paginated items whose Steam item type identifies them as profile backgrounds. Names, market prices, listing links, and image paths all come from Steam responses or Steam-hosted image URLs; no third-party catalog is used.
+The background picker reads the Steam Community Market directly through `GET /api/backgrounds`. The server requests `/market/search/render/` for app `753` and item class `tag_item_class_3`. Steam currently returns at most 10 results per request even when a larger `count` is requested, so the server combines consecutive 10-item responses to fill picker pages of up to 30 using three requests. It returns items whose Steam item type identifies them as profile backgrounds. Names, market prices, listing links, and image paths all come from Steam responses or Steam-hosted image URLs; no third-party catalog is used.
 
 The selected market image is applied only to `.profile_page` inside the sandboxed profile preview. Resetting the picker restores the source page's original inline background, or lets its stylesheet background show through. This does not equip or purchase the item on Steam.
 
