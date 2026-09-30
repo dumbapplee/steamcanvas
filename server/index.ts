@@ -253,6 +253,7 @@ app.get('/api/avatar-frames', async (request, response) => {
         game: String(appid),
         imageUrl: `${assetBase}${image}`,
         thumbnailUrl: `${assetBase}${data.item_image_small || image}`,
+        animatedImageUrl: data.animated && data.item_image_small ? `${assetBase}${data.item_image_small}` : undefined,
         animated: Boolean(data.animated),
       }];
     });

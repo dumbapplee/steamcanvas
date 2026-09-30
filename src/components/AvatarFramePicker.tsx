@@ -7,6 +7,7 @@ export type SteamAvatarFrame = {
 	game: string;
 	imageUrl: string;
 	thumbnailUrl: string;
+	animatedImageUrl?: string;
 	animated: boolean;
 };
 
@@ -109,7 +110,12 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 			<div className="avatar-frame-current-row">
 				<div className="avatar-frame-preview" role="img" aria-label={currentFrameName}>
 					{sourceAvatar && <img className="avatar-frame-portrait" src={sourceAvatar} alt="" />}
-					{currentFrameUrl && <img className="avatar-frame-overlay" src={currentFrameUrl} alt="" />}
+					{value?.animatedImageUrl ? (
+						<picture className="avatar-frame-overlay-picture">
+							<source media="(prefers-reduced-motion: no-preference)" srcSet={value.animatedImageUrl} />
+							<img className="avatar-frame-overlay" src={value.imageUrl} alt="" />
+						</picture>
+					) : currentFrameUrl && <img className="avatar-frame-overlay" src={currentFrameUrl} alt="" />}
 				</div>
 				<div className="background-current-actions">
 					<span className="background-current-name" title={currentFrameName}>{currentFrameName}</span>
@@ -159,7 +165,10 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 							>
 								<span className="avatar-frame-option-preview">
 									{sourceAvatar && <img className="avatar-frame-portrait" src={sourceAvatar} alt="" />}
-									<img className="avatar-frame-overlay" src={frame.thumbnailUrl} alt="" loading="lazy" />
+									<picture className="avatar-frame-overlay-picture">
+										{frame.animatedImageUrl && <source media="(prefers-reduced-motion: no-preference)" srcSet={frame.animatedImageUrl} />}
+										<img className="avatar-frame-overlay" src={frame.imageUrl} alt="" loading="lazy" />
+									</picture>
 								</span>
 								<span className="avatar-frame-option-name">{frame.name}</span>
 								{frame.animated && <span className="avatar-frame-animation-mark">ANIMATED</span>}

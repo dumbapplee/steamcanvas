@@ -71,6 +71,16 @@ export default function App() {
     frameElement.classList.add('profile_avatar_frame');
     if (avatarFrame) {
       const picture = avatarInner.ownerDocument.createElement('picture');
+      if (avatarFrame.animatedImageUrl) {
+        const animatedSource = avatarInner.ownerDocument.createElement('source');
+        animatedSource.media = '(prefers-reduced-motion: no-preference)';
+        animatedSource.srcset = avatarFrame.animatedImageUrl;
+        picture.append(animatedSource);
+        const reducedMotionSource = avatarInner.ownerDocument.createElement('source');
+        reducedMotionSource.media = '(prefers-reduced-motion: reduce)';
+        reducedMotionSource.srcset = avatarFrame.imageUrl;
+        picture.append(reducedMotionSource);
+      }
       const image = avatarInner.ownerDocument.createElement('img');
       image.src = avatarFrame.imageUrl;
       image.alt = '';
