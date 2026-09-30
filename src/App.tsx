@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowUpRight, CircleHelp, ExternalLink, LoaderCircle, PanelsTopLeft, Search, ShieldCheck } from 'lucide-react';
 import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './components/AvatarEditor';
+import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
 
 type ProfilePreview = {
   name: string;
@@ -16,8 +17,10 @@ export default function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [avatarEdit, setAvatarEdit] = useState<AvatarEditState>(DEFAULT_AVATAR_EDIT);
+  const [background, setBackground] = useState<SteamBackground | null>(null);
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const previewFrame = useRef<HTMLIFrameElement>(null);
+  const sourceBackgroundStyle = useRef<string | null>(null);
 
   useEffect(() => {
     if (!profile || !previewLoaded) return;
@@ -47,6 +50,20 @@ export default function App() {
     image.style.removeProperty('border');
   }, [avatarEdit, previewLoaded, profile]);
 
+  useEffect(() => {
+    if (!profile || !previewLoaded) return;
+
+    const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
+    if (!page) return;
+    if (background) {
+      page.style.setProperty('background-image', `url("${background.imageUrl}")`, 'important');
+    } else if (sourceBackgroundStyle.current !== null) {
+      page.setAttribute('style', sourceBackgroundStyle.current);
+    } else {
+      page.removeAttribute('style');
+    }
+  }, [background, previewLoaded, profile]);
+
   async function loadProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!identifier.trim() || loading) return;
@@ -56,6 +73,8 @@ export default function App() {
     setProfile(null);
     setPreviewLoaded(false);
     setAvatarEdit(DEFAULT_AVATAR_EDIT);
+    setBackground(null);
+    sourceBackgroundStyle.current = null;
 
     try {
       const response = await fetch('/api/profile', {
@@ -126,7 +145,12 @@ export default function App() {
             ) : <p className="source-empty">Waiting for a profile</p>}
           </div>
 
-          {profile && <AvatarEditor sourceAvatar={profile.avatar} value={avatarEdit} onChange={setAvatarEdit} />}
+          {profile && (
+            <>
+              <AvatarEditor sourceAvatar={profile.avatar} value={avatarEdit} onChange={setAvatarEdit} />
+              <BackgroundPicker value={background} onChange={setBackground} />
+            </>
+          )}
 
           <div className="privacy-note"><ShieldCheck size={15} /><span>Only public profile pages are fetched. Private content stays private.</span></div>
           <div className="panel-index">STEAMCANVAS <span>PROFILE PREVIEW</span></div>
@@ -147,7 +171,11 @@ export default function App() {
                 title={`Steam profile preview for ${profile.name}`}
                 sandbox="allow-same-origin"
                 srcDoc={profile.html}
-                onLoad={() => setPreviewLoaded(true)}
+                onLoad={() => {
+                  const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
+                  sourceBackgroundStyle.current = page?.getAttribute('style') ?? null;
+                  setPreviewLoaded(true);
+                }}
               />
             ) : (
               <div className="empty-canvas">

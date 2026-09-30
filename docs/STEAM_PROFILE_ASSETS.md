@@ -37,6 +37,12 @@ For the initial parser, inspect `.profile_page` and parse the `background-image`
 
 Store the source URL separately from presentation settings. Future fit/crop/zoom/overlay controls should modify SteamCanvas state, never mutate a Steam account.
 
+## Steam Market background catalog
+
+The background picker reads the Steam Community Market directly through `GET /api/backgrounds`. The server requests `/market/search/render/` for app `753`, filters item class `tag_item_class_3`, and returns paginated items whose Steam item type identifies them as profile backgrounds. Names, market prices, listing links, and image paths all come from Steam responses or Steam-hosted image URLs; no third-party catalog is used.
+
+The selected market image is applied only to `.profile_page` inside the sandboxed profile preview. Resetting the picker restores the source page's original inline background, or lets its stylesheet background show through. This does not equip or purchase the item on Steam.
+
 ## Avatar and frame extraction
 
 Avatar and frame are separate layers:

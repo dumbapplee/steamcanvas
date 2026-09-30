@@ -5,8 +5,80 @@ import express from 'express';
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const steamHost = 'steamcommunity.com';
+const steamImageHost = 'community.cloudflare.steamstatic.com';
+
+type SteamMarketItem = {
+  name?: string;
+  hash_name?: string;
+  sell_price_text?: string;
+  asset_description?: {
+    icon_url?: string;
+    market_name?: string;
+    market_hash_name?: string;
+    type?: string;
+  };
+};
+
+type SteamMarketResponse = {
+  success?: boolean;
+  total_count?: number;
+  results?: SteamMarketItem[];
+};
 
 app.use(express.json({ limit: '4kb' }));
+
+app.get('/api/backgrounds', async (request, response) => {
+  const query = typeof request.query.query === 'string' ? request.query.query.trim().slice(0, 80) : '';
+  const start = Number(request.query.start ?? 0);
+  const count = Number(request.query.count ?? 24);
+  if (!Number.isInteger(start) || start < 0 || start > 100000 || !Number.isInteger(count) || count < 1 || count > 50) {
+    response.status(400).json({ error: 'Invalid background search page.' });
+    return;
+  }
+
+  const marketUrl = new URL('/market/search/render/', `https://${steamHost}`);
+  marketUrl.searchParams.set('query', query);
+  marketUrl.searchParams.set('start', String(start));
+  marketUrl.searchParams.set('count', String(count));
+  marketUrl.searchParams.set('search_descriptions', '0');
+  marketUrl.searchParams.set('sort_column', 'popular');
+  marketUrl.searchParams.set('sort_dir', 'desc');
+  marketUrl.searchParams.set('appid', '753');
+  marketUrl.searchParams.append('category_753_item_class[]', 'tag_item_class_3');
+  marketUrl.searchParams.set('norender', '1');
+
+  try {
+    const result = await axios.get<SteamMarketResponse>(marketUrl.href, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+        Accept: 'application/json',
+      },
+    });
+    if (!result.data.success || !Array.isArray(result.data.results)) throw new Error('Steam returned an invalid background catalog.');
+
+    const items = result.data.results.flatMap((item) => {
+      const description = item.asset_description;
+      const hashName = item.hash_name || description?.market_hash_name;
+      const iconUrl = description?.icon_url;
+      if (!description?.type?.toLowerCase().includes('profile background') || !hashName || !iconUrl || !/^[\w-]+$/.test(iconUrl)) return [];
+
+      return [{
+        id: hashName,
+        name: description.market_name || item.name || hashName,
+        game: description.type.replace(/\s+profile background$/i, ''),
+        price: item.sell_price_text || '',
+        imageUrl: `https://${steamImageHost}/economy/image/${iconUrl}`,
+        marketUrl: new URL(`/market/listings/753/${encodeURIComponent(hashName)}`, `https://${steamHost}`).href,
+      }];
+    });
+
+    response.setHeader('Cache-Control', 'public, max-age=60');
+    response.json({ items, totalCount: result.data.total_count || 0, pageSize: count });
+  } catch {
+    response.status(502).json({ error: 'Steam could not load profile backgrounds right now.' });
+  }
+});
 
 function resolveProfileUrl(input: unknown): URL {
   if (typeof input !== 'string' || !input.trim()) {
