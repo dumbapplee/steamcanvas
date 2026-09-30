@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowUpRight, CircleHelp, ExternalLink, LoaderCircle, PanelsTopLeft, Search, ShieldCheck } from 'lucide-react';
 import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './components/AvatarEditor';
+import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFramePicker';
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
 
 type ProfilePreview = {
@@ -17,12 +18,15 @@ export default function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [avatarEdit, setAvatarEdit] = useState<AvatarEditState>(DEFAULT_AVATAR_EDIT);
+  const [avatarFrame, setAvatarFrame] = useState<SteamAvatarFrame | null>(null);
   const [background, setBackground] = useState<SteamBackground | null>(null);
   const [sourceBackgroundImage, setSourceBackgroundImage] = useState('');
+  const [sourceAvatarFrameImage, setSourceAvatarFrameImage] = useState('');
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const sourceBackgroundStyle = useRef<string | null>(null);
   const sourceBackgroundVideo = useRef<HTMLElement | null>(null);
+  const sourceAvatarFrame = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!profile || !previewLoaded) return;
@@ -51,6 +55,30 @@ export default function App() {
     image.style.removeProperty('transform-origin');
     image.style.removeProperty('border');
   }, [avatarEdit, previewLoaded, profile]);
+
+  useEffect(() => {
+    if (!profile || !previewLoaded) return;
+
+    const avatarInner = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.playerAvatarAutoSizeInner');
+    if (!avatarInner) return;
+    avatarInner.querySelector('.profile_avatar_frame')?.remove();
+
+    const frameElement = avatarFrame
+      ? avatarInner.ownerDocument.createElement('div')
+      : sourceAvatarFrame.current?.cloneNode(true) as HTMLElement | undefined;
+    if (!frameElement) return;
+
+    frameElement.classList.add('profile_avatar_frame');
+    if (avatarFrame) {
+      const picture = avatarInner.ownerDocument.createElement('picture');
+      const image = avatarInner.ownerDocument.createElement('img');
+      image.src = avatarFrame.imageUrl;
+      image.alt = '';
+      picture.append(image);
+      frameElement.replaceChildren(picture);
+    }
+    avatarInner.insertBefore(frameElement, avatarInner.firstElementChild);
+  }, [avatarFrame, previewLoaded, profile]);
 
   useEffect(() => {
     if (!profile || !previewLoaded) return;
@@ -112,10 +140,13 @@ export default function App() {
     setProfile(null);
     setPreviewLoaded(false);
     setAvatarEdit(DEFAULT_AVATAR_EDIT);
+    setAvatarFrame(null);
     setBackground(null);
     setSourceBackgroundImage('');
+    setSourceAvatarFrameImage('');
     sourceBackgroundStyle.current = null;
     sourceBackgroundVideo.current = null;
+    sourceAvatarFrame.current = null;
 
     try {
       const response = await fetch('/api/profile', {
@@ -189,6 +220,12 @@ export default function App() {
           {profile && (
             <>
               <AvatarEditor sourceAvatar={profile.avatar} value={avatarEdit} onChange={setAvatarEdit} />
+              <AvatarFramePicker
+                sourceAvatar={avatarEdit.imageUrl || profile.avatar}
+                sourceFrameImage={sourceAvatarFrameImage}
+                value={avatarFrame}
+                onChange={setAvatarFrame}
+              />
               <BackgroundPicker sourceBackgroundImage={sourceBackgroundImage} value={background} onChange={setBackground} />
             </>
           )}
@@ -215,10 +252,14 @@ export default function App() {
                 onLoad={() => {
                   const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
                   const animatedBackground = page?.querySelector<HTMLElement>('.profile_animated_background');
+                  const avatarFrameElement = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.playerAvatarAutoSizeInner .profile_avatar_frame');
+                  const avatarFrameImage = avatarFrameElement?.querySelector<HTMLImageElement>('img');
                   sourceBackgroundStyle.current = page?.getAttribute('style') ?? null;
                   sourceBackgroundVideo.current = animatedBackground ? animatedBackground.cloneNode(true) as HTMLElement : null;
+                  sourceAvatarFrame.current = avatarFrameElement ? avatarFrameElement.cloneNode(true) as HTMLElement : null;
                   const poster = animatedBackground?.querySelector<HTMLVideoElement>('video')?.poster;
                   setSourceBackgroundImage(poster ? `url("${poster}")` : page ? getComputedStyle(page).backgroundImage : '');
+                  setSourceAvatarFrameImage(avatarFrameImage?.currentSrc || avatarFrameImage?.src || '');
                   setPreviewLoaded(true);
                 }}
               />

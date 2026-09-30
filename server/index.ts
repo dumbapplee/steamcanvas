@@ -33,6 +33,7 @@ type SteamPointShopDefinition = {
   community_item_data?: {
     item_name?: string;
     item_title?: string;
+    item_image_small?: string;
     item_image_large?: string;
     item_movie_webm?: string;
     item_movie_mp4?: string;
@@ -74,16 +75,16 @@ function encodeStringField(field: number, value: string): Buffer {
   return Buffer.concat([encodeVarint((field << 3) | 2), encodeVarint(bytes.length), bytes]);
 }
 
-function makePointsShopQuery(cursor?: string): string {
+function makePointsShopQuery(cursor?: string, communityItemClass = 3): string {
   const query = Buffer.concat([
-    encodeNumberField(3, 3),
+    encodeNumberField(3, communityItemClass),
     encodeStringField(4, 'english'),
     encodeNumberField(5, 20),
     ...(cursor ? [encodeStringField(6, cursor)] : []),
     encodeNumberField(7, 2),
     encodeNumberField(8, 0),
     encodeNumberField(9, 1),
-    encodeNumberField(12, 1),
+    ...(communityItemClass === 3 ? [encodeNumberField(12, 1)] : []),
     encodeNumberField(17, 3),
     encodeNumberField(17, 4),
   ]);
@@ -208,6 +209,65 @@ app.get('/api/points-backgrounds', async (request, response) => {
     response.json(payload);
   } catch {
     response.status(502).json({ error: 'Steam could not load animated Points Shop backgrounds right now.' });
+  }
+});
+
+app.get('/api/avatar-frames', async (request, response) => {
+  const cursor = typeof request.query.cursor === 'string' ? request.query.cursor : '';
+  if (cursor && (cursor.length > 128 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cursor))) {
+    response.status(400).json({ error: 'Invalid avatar frame page cursor.' });
+    return;
+  }
+
+  const cacheKey = `avatar-frames:${cursor || 'first'}`;
+  const cached = pointsShopCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    response.setHeader('Cache-Control', 'public, max-age=300');
+    response.json(cached.payload);
+    return;
+  }
+
+  const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
+  apiUrl.searchParams.set('origin', 'https://store.steampowered.com');
+  apiUrl.searchParams.set('input_protobuf_encoded', makePointsShopQuery(cursor || undefined, 14));
+  apiUrl.searchParams.set('format', 'json');
+
+  try {
+    const result = await axios.get<SteamPointShopResponse>(apiUrl.href, {
+      timeout: 15000,
+      headers: { Accept: 'application/json' },
+    });
+    const pointShopResponse = result.data.response?.responses?.find((entry) => entry.eresult === 1)?.response;
+    if (!pointShopResponse || !Array.isArray(pointShopResponse.definitions)) throw new Error('Steam returned an invalid avatar frame catalog.');
+
+    const items = pointShopResponse.definitions.flatMap((definition) => {
+      const data = definition.community_item_data;
+      const appid = definition.appid;
+      const image = data?.item_image_large;
+      if (!definition.active || definition.community_item_class !== 14 || !appid || !definition.defid || !image) return [];
+
+      const assetBase = `https://shared.fastly.steamstatic.com/community_assets/images/items/${appid}/`;
+      return [{
+        id: `frame:${appid}:${definition.defid}`,
+        name: data.item_title || data.item_name || 'Avatar frame',
+        game: String(appid),
+        imageUrl: `${assetBase}${image}`,
+        thumbnailUrl: `${assetBase}${data.item_image_small || image}`,
+        animated: Boolean(data.animated),
+      }];
+    });
+
+    const payload = {
+      items,
+      totalCount: pointShopResponse.total_count || items.length,
+      pageSize: 20,
+      nextCursor: pointShopResponse.next_cursor || null,
+    };
+    pointsShopCache.set(cacheKey, { expiresAt: Date.now() + 300000, payload });
+    response.setHeader('Cache-Control', 'public, max-age=300');
+    response.json(payload);
+  } catch {
+    response.status(502).json({ error: 'Steam could not load avatar frames right now.' });
   }
 });
 
