@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { ArrowUpRight, Check, CircleHelp, Download, ExternalLink, Github, LoaderCircle, PanelsTopLeft, Search, ShieldCheck, Upload } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { ArrowUpRight, Check, CircleHelp, Download, ExternalLink, Github, LoaderCircle, PanelsTopLeft, Search, ShieldCheck } from 'lucide-react';
 import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './components/AvatarEditor';
 import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFramePicker';
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
@@ -161,7 +161,7 @@ export default function App() {
   const [projectStatus, setProjectStatus] = useState('Autosave ready');
   const [savedDraft, setSavedDraft] = useState<ProjectDraft | null>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
-  const projectFileInput = useRef<HTMLInputElement>(null);
+  const exportAssetsRef = useRef<(() => Promise<void>) | null>(null);
   const pendingDraft = useRef<ProjectDraft | null>(null);
   const identifierRef = useRef('');
   const sourceBackgroundStyle = useRef<string | null>(null);
@@ -384,41 +384,13 @@ export default function App() {
   }
 
   async function exportProject() {
-    const document = previewFrame.current?.contentDocument;
-    if (!document || !profile) return;
     try {
-      const draft = createProjectDraft(document);
-      setSavedDraft(draft);
-      void writeProjectDraft(draft).catch(() => setProjectStatus('Exported; local autosave unavailable'));
-      const blob = new Blob([JSON.stringify(draft, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = globalThis.document.createElement('a');
-      const fileName = profile.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'steamcanvas';
-      link.href = url;
-      link.download = `${fileName}-project.json`;
-      globalThis.document.body.append(link);
-      link.click();
-      link.remove();
-      globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setProjectStatus('Project exported');
+      if (!exportAssetsRef.current) throw new Error('Load a profile before exporting showcase artwork.');
+      setProjectStatus('Preparing showcase ZIP');
+      await exportAssetsRef.current();
+      setProjectStatus('Showcase ZIP exported');
     } catch (caught) {
-      setProjectStatus(caught instanceof Error ? caught.message : 'Project export failed');
-    }
-  }
-
-  async function importProject(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    try {
-      const imported: unknown = JSON.parse(await file.text());
-      if (!isProjectDraft(imported)) throw new Error('This is not a supported SteamCanvas project file.');
-      if (!imported.profileIdentifier.trim()) throw new Error('The project does not include a profile identifier.');
-      setSavedDraft(imported);
-      setProjectStatus('Restoring project');
-      await loadProfileByIdentifier(imported.profileIdentifier, imported);
-    } catch (caught) {
-      setProjectStatus(caught instanceof Error ? caught.message : 'Project import failed');
+      setProjectStatus(caught instanceof Error ? caught.message : 'Showcase ZIP export failed');
     }
   }
 
@@ -476,7 +448,6 @@ export default function App() {
           <a className="topbar-link" href="https://github.com/dumbapplee/steamcanvas" target="_blank" rel="noreferrer"><Github size={15} /> GitHub <ExternalLink size={12} /></a>
           <span className="topbar-link support-placeholder" aria-disabled="true" title="Support link coming soon">Support me</span>
         </nav>
-        <input ref={projectFileInput} className="visually-hidden" type="file" accept="application/json,.json" aria-hidden="true" tabIndex={-1} onChange={(event) => void importProject(event)} />
       </header>
 
       {!profile ? (
@@ -506,7 +477,6 @@ export default function App() {
             </form>
             <div className="entry-actions">
               {savedDraft && <button className="entry-resume" type="button" onClick={() => void loadProfileByIdentifier(savedDraft.profileIdentifier, savedDraft)} disabled={loading}><PanelsTopLeft size={15} /> Resume saved draft</button>}
-              <button className="entry-import" type="button" onClick={() => projectFileInput.current?.click()} disabled={loading}><Upload size={15} /> Import a project</button>
               {loading && <span className="entry-loading"><LoaderCircle className="spin" size={13} /> FETCHING PROFILE</span>}
             </div>
             <div className="entry-footnote"><span>YOUR WORKSPACE</span><span>BUILT AROUND YOUR PROFILE</span></div>
@@ -615,8 +585,7 @@ export default function App() {
             </div>
             <div className="preview-toolbar-actions">
               <span className="draft-status" role="status" aria-live="polite">{projectStatus === 'Draft saved locally' && <Check size={13} />}{projectStatus}</span>
-              <button className="project-action" type="button" onClick={() => void exportProject()} disabled={!profile || !previewLoaded} title="Export project as JSON"><Download size={14} />Export</button>
-              <button className="project-action" type="button" onClick={() => projectFileInput.current?.click()} disabled={loading} title="Import a SteamCanvas project"><Upload size={14} />Import</button>
+              <button className="project-action" type="button" onClick={() => void exportProject()} disabled={!profile || !previewLoaded} title="Download uploaded showcase artwork as ZIP"><Download size={14} />Export</button>
               {profile && <a className="open-source" href={profile.url} target="_blank" rel="noreferrer">Open on Steam <ExternalLink size={13} /></a>}
             </div>
           </div>
@@ -670,10 +639,12 @@ export default function App() {
                 <ShowcaseEditor
                   previewDocument={showcaseDocument}
                   profileUrl={profile?.url || ''}
+                  profileName={profile?.name || 'steamcanvas'}
                   addControlTarget={showcaseAddTarget}
                   trashControlTarget={showcaseTrashTarget}
                   removedShowcases={removedShowcases}
                   onRemovedShowcasesChange={setRemovedShowcases}
+                  exportAssetsRef={exportAssetsRef}
                 />
                 {profile && <div className="showcase-trash-slot" ref={setShowcaseTrashTarget} />}
           </div>

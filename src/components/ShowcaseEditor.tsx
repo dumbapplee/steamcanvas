@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Download, ImagePlus, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
+import { Camera, ChevronLeft, ChevronRight, Hammer, ImagePlus, Pencil, Plus, RotateCcw, Search, Star, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
@@ -33,10 +33,12 @@ type EditorSource = File | PublicScreenshot;
 type ShowcaseEditorProps = {
 	previewDocument: Document | null;
 	profileUrl: string;
+	profileName: string;
 	addControlTarget: HTMLElement | null;
 	trashControlTarget: HTMLElement | null;
 	removedShowcases: RemovedShowcase[];
 	onRemovedShowcasesChange: (showcases: RemovedShowcase[]) => void;
+	exportAssetsRef: { current: (() => Promise<void>) | null };
 };
 
 type ArtworkMosaic = {
@@ -99,18 +101,28 @@ function classifyShowcase(element: HTMLElement): ShowcaseKind {
 	return element.querySelector('.screenshot_showcase_primary.single') ? 'featured-artwork' : 'artwork';
 }
 
+function readUploadedAssets(element: HTMLElement, kind: ShowcaseKind, title: string): Array<{ name: string; url: string }> {
+	const selector = kind === 'workshop'
+		? '.myworkshop_showcase .workshop_showcase_item_image'
+		: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot.showcase_slot img';
+	const baseName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'showcase-artwork';
+	return [...element.querySelectorAll<HTMLImageElement>(selector)]
+		.filter((image) => !image.closest('[data-steamcanvas-empty-slot]') && /^data:image\//i.test(image.currentSrc || image.src))
+		.map((image, index) => {
+			const url = image.currentSrc || image.src;
+			const mime = url.match(/^data:image\/([^;,]+)/i)?.[1]?.toLowerCase() || 'png';
+			const extension = mime === 'jpeg' ? 'jpg' : mime.split('+')[0];
+			const suffix = kind === 'featured-artwork' ? '' : kind === 'workshop' ? `-${index + 1}` : `-${index === 0 ? 'main' : index === 1 ? 'side' : `side-${index}`}`;
+			return { name: `${baseName}${suffix}.${extension}`, url };
+		});
+}
+
 function hasTwoPanelImageEditor(kind: ShowcaseKind): boolean {
 	return kind === 'artwork' || kind === 'screenshot';
 }
 
 function getMosaicPanelCount(kind: ShowcaseKind, layout: ArtworkLayout): number {
 	return kind === 'workshop' ? 5 : hasTwoPanelImageEditor(kind) ? layout === 'main-three-side' ? 4 : 2 : 1;
-}
-
-function getExportPanelCount(entry: ShowcaseEntry): number {
-	if (entry.kind === 'workshop') return 5;
-	if (hasTwoPanelImageEditor(entry.kind) && entry.element.dataset.steamcanvasMosaicPanels === '4') return 4;
-	return hasTwoPanelImageEditor(entry.kind) ? 2 : 0;
 }
 
 function fitFeaturedImage(image: HTMLImageElement): void {
@@ -586,9 +598,8 @@ function sourceName(source: EditorSource): string {
 	return isPublicScreenshot(source) ? `Screenshot ${source.id}` : source.name;
 }
 
-export default function ShowcaseEditor({ previewDocument, profileUrl, addControlTarget, trashControlTarget, removedShowcases, onRemovedShowcasesChange }: ShowcaseEditorProps) {
+export default function ShowcaseEditor({ previewDocument, profileUrl, profileName, addControlTarget, trashControlTarget, removedShowcases, onRemovedShowcasesChange, exportAssetsRef }: ShowcaseEditorProps) {
 	const [entries, setEntries] = useState<ShowcaseEntry[]>([]);
-	const [newShowcaseKind, setNewShowcaseKind] = useState<CreatableShowcaseKind>('artwork');
 	const [error, setError] = useState('');
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [imageInputMode, setImageInputMode] = useState<ImageInputMode>('composite');
@@ -606,13 +617,17 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 	const [publicScreenshotNextPage, setPublicScreenshotNextPage] = useState(1);
 	const [publicScreenshotHasMore, setPublicScreenshotHasMore] = useState(true);
 	const [addingOpen, setAddingOpen] = useState(false);
+	const [addDrawerLeft, setAddDrawerLeft] = useState<number | null>(null);
+	const [addDrawerTop, setAddDrawerTop] = useState<number | null>(null);
 	const [addControlHost, setAddControlHost] = useState<HTMLElement | null>(null);
+	const [addMenuHost, setAddMenuHost] = useState<HTMLElement | null>(null);
 	const [trashHost, setTrashHost] = useState<HTMLElement | null>(null);
 	const [trashOpen, setTrashOpen] = useState(false);
 	const [draggingShowcaseId, setDraggingShowcaseId] = useState<string | null>(null);
 	const [dragTargetShowcaseId, setDragTargetShowcaseId] = useState<string | null>(null);
 	const [hoveredShowcaseId, setHoveredShowcaseId] = useState<string | null>(null);
 	const editorDialogRef = useRef<HTMLDialogElement>(null);
+	const addMenuRef = useRef<HTMLElement>(null);
 	const previewRequestId = useRef(0);
 	const dragTargetRef = useRef<{ id: string | null; after: boolean }>({ id: null, after: false });
 	const pointerGestureRef = useRef<ShowcasePointerGesture | null>(null);
@@ -652,7 +667,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 				element.dataset.steamcanvasDraggable = 'true';
 				const host = createOverlayHost(previewDocument!, element, id);
 				if (kind === 'featured-artwork') fitFeaturedArtwork(element);
-				return { id, kind, title, element, host };
+				const exportFiles = readUploadedAssets(element, kind, title);
+				return { id, kind, title, element, host, ...(exportFiles.length ? { exportFiles } : {}) };
 			});
 		setEntries(nextEntries);
 		const addHost = addControlTarget?.ownerDocument.createElement('div') || null;
@@ -662,6 +678,9 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 			addControlTarget.append(addHost);
 		}
 		setAddControlHost(addHost);
+		const menuHost = addControlTarget?.ownerDocument.createElement('div') || null;
+		if (menuHost) addControlTarget?.ownerDocument.body.append(menuHost);
+		setAddMenuHost(menuHost);
 		setEditingId(null);
 		setAddingOpen(false);
 		setError('');
@@ -673,6 +692,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 			});
 			dragStyle.remove();
 			addHost?.remove();
+			menuHost?.remove();
 		};
 	}, [addControlTarget, previewDocument]);
 
@@ -711,7 +731,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 		if (!addingOpen || !addControlHost) return;
 		const closeOnOutside = (event: Event) => {
 			const target = event.target as Node | null;
-			if (target && !addControlHost.contains(target)) setAddingOpen(false);
+			if (target && !addControlHost.contains(target) && !addMenuRef.current?.contains(target)) setAddingOpen(false);
 		};
 		const closeOnEscape = (event: KeyboardEvent) => {
 			if (event.key === 'Escape') setAddingOpen(false);
@@ -726,6 +746,25 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 			document.removeEventListener('keydown', closeOnEscape, true);
 		});
 	}, [addingOpen, addControlHost, previewDocument]);
+
+	useLayoutEffect(() => {
+		if (!addingOpen || !addControlHost) return;
+		const positionDrawer = () => {
+			const drawer = addMenuRef.current;
+			if (!drawer) return;
+			const bounds = drawer.getBoundingClientRect();
+			const anchor = addControlHost.getBoundingClientRect();
+			const maxLeft = Math.max(12, globalThis.innerWidth - bounds.width - 12);
+			const nextLeft = Math.max(12, Math.min(anchor.right + 10, maxLeft));
+			const maxTop = Math.max(12, globalThis.innerHeight - bounds.height - 12);
+			const nextTop = Math.max(12, Math.min(anchor.top - 5, maxTop));
+			setAddDrawerLeft((current) => current === nextLeft ? current : nextLeft);
+			setAddDrawerTop((current) => current === nextTop ? current : nextTop);
+		};
+		positionDrawer();
+		globalThis.addEventListener('resize', positionDrawer);
+		return () => globalThis.removeEventListener('resize', positionDrawer);
+	}, [addControlHost, addingOpen]);
 
 	useEffect(() => {
 		const dialog = editorDialogRef.current;
@@ -877,6 +916,47 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 		};
 	}, [entries, previewDocument]);
 
+	useEffect(() => {
+		exportAssetsRef.current = async () => {
+			const folders: Record<ShowcaseKind, string> = {
+				artwork: 'Artwork Showcase',
+				'featured-artwork': 'Featured Artwork',
+				screenshot: 'Screenshots',
+				workshop: 'Workshop',
+				other: '',
+			};
+			const exportableEntries = entries.flatMap((entry, index) => {
+				if (entry.kind === 'other' || entry.element.dataset.steamcanvasPublicScreenshots === 'true') return [];
+				const files = entry.exportFiles || (entry.animatedArtwork ? [entry.animatedArtwork] : []);
+				return files.length ? [{ entry, files, index }] : [];
+			});
+			if (!exportableEntries.length) throw new Error('No uploaded showcase artwork to export yet.');
+
+			const archive = new JSZip();
+			for (const { entry, files, index } of exportableEntries) {
+				const showcaseFolder = `${String(index + 1).padStart(2, '0')} - ${entry.title.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'Showcase'}`;
+				const folder = archive.folder(folders[entry.kind])?.folder(showcaseFolder);
+				if (!folder) continue;
+				for (const file of files) {
+					const response = await fetch(file.url);
+					if (!response.ok) throw new Error(`Could not read ${file.name}.`);
+					folder.file(file.name, await response.blob());
+				}
+			}
+			const blob = await archive.generateAsync({ type: 'blob' });
+			const url = URL.createObjectURL(blob);
+			const link = globalThis.document.createElement('a');
+			const baseName = profileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'steamcanvas';
+			link.href = url;
+			link.download = `${baseName}-showcase-artwork.zip`;
+			globalThis.document.body.append(link);
+			link.click();
+			link.remove();
+			globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+		};
+		return () => { exportAssetsRef.current = null; };
+	}, [entries, exportAssetsRef, profileName]);
+
 	function syncOrder(nextEntries: ShowcaseEntry[]) {
 		const area = getShowcaseArea(previewDocument);
 		if (!area) return;
@@ -998,28 +1078,28 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 		onRemovedShowcasesChange(removedShowcases.filter((item) => item.key !== archived.key));
 	}
 
-	function addShowcase() {
+	function addShowcase(kind: CreatableShowcaseKind) {
 		const area = getShowcaseArea(previewDocument, true);
 		if (!area) {
 			setError('Showcase area not found.');
 			return;
 		}
-		const element = newShowcaseKind === 'workshop'
+		const element = kind === 'workshop'
 			? makeWorkshopShowcase(area.ownerDocument)
-			: newShowcaseKind === 'screenshot'
+			: kind === 'screenshot'
 				? makeScreenshotShowcase(area.ownerDocument)
-				: makeArtworkShowcase(area.ownerDocument, newShowcaseKind);
+				: makeArtworkShowcase(area.ownerDocument, kind);
 		const id = `showcase-new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 		element.dataset.steamcanvasRestoreKey = `showcase-key-${Math.random().toString(36).slice(2, 12)}`;
 		element.dataset.steamcanvasShowcaseId = id;
-		const title = newShowcaseKind === 'workshop'
+		const title = kind === 'workshop'
 			? 'Workshop Showcase'
-			: newShowcaseKind === 'screenshot'
+			: kind === 'screenshot'
 				? 'Screenshot Showcase'
-				: newShowcaseKind === 'featured-artwork' ? 'Featured Artwork Showcase' : 'Artwork Showcase';
+			: kind === 'featured-artwork' ? 'Featured Artwork Showcase' : 'Artwork Showcase';
 		element.dataset.steamcanvasDraggable = 'true';
 		const host = createOverlayHost(area.ownerDocument, element, id);
-		const entry: ShowcaseEntry = { id, kind: newShowcaseKind, title, element, host };
+		const entry: ShowcaseEntry = { id, kind, title, element, host };
 		const placeholder = [...area.children].find((child) => child.classList.contains('customization_edit')) || null;
 		area.insertBefore(element, placeholder);
 		const previewWindow = area.ownerDocument.defaultView;
@@ -1369,6 +1449,14 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 					}));
 				}
 			}
+			if (entry.kind === 'featured-artwork') {
+				const baseName = sourceName(files[0]).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || 'featured-artwork';
+				setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
+					...item,
+					exportFiles: [{ name: `${baseName}.${getImageExtension(files[0] as File)}`, url: mosaic.images[0] }],
+					animatedArtwork: undefined,
+				}));
+			}
 			if (!exportWarning) {
 				setError('');
 				setEditorError('');
@@ -1380,63 +1468,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 		}
 	}
 
-	async function downloadArtwork(entry: ShowcaseEntry) {
-		if (entry.exportFiles?.length === getExportPanelCount(entry)) {
-			try {
-				const archive = new JSZip();
-				for (const file of entry.exportFiles) {
-					const response = await fetch(file.url);
-					if (!response.ok) throw new Error(`Could not read ${file.name}.`);
-					archive.file(file.name, await response.blob());
-				}
-				const blob = await archive.generateAsync({ type: 'blob' });
-				const url = URL.createObjectURL(blob);
-				const baseName = entry.exportFiles[0].name.replace(/-(?:main|side(?:-\d+)?|[1-5])\.(?:png|jpe?g|webp|gif|apng|avif)$/i, '') || 'steam-artwork';
-				const link = globalThis.document.createElement('a');
-				link.href = url;
-				link.download = `${baseName}.zip`;
-				globalThis.document.body.append(link);
-				link.click();
-				link.remove();
-				globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
-				return;
-			} catch (caught) {
-				setError(caught instanceof Error ? caught.message : 'Could not create the artwork ZIP.');
-				setEditingId(entry.id);
-				return;
-			}
-		}
-
-		if (entry.animatedArtwork) {
-			const link = globalThis.document.createElement('a');
-			link.href = entry.animatedArtwork.url;
-			link.download = entry.animatedArtwork.name;
-			globalThis.document.body.append(link);
-			link.click();
-			link.remove();
-		}
-	}
-
 	const buttonStyle: CSSProperties = {
 		minHeight: '30px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '0 9px',
 		border: '1px solid rgba(220,225,228,.35)', borderRadius: '3px', background: 'rgba(18,25,31,.94)',
 		color: '#f2f4f3', cursor: 'pointer', font: '12px Arial,sans-serif', whiteSpace: 'nowrap',
-	};
-	const popoverStyle: CSSProperties = {
-		position: 'absolute', top: '36px', right: 0, width: '280px', padding: '14px', zIndex: 2147483000,
-		border: '1px solid #76818a', borderRadius: '3px', background: '#202a32', color: '#e9eef0',
-		boxShadow: '0 8px 24px rgba(0,0,0,.38)', font: '13px Arial,sans-serif', textAlign: 'left',
-	};
-	const fieldStyle: CSSProperties = {
-		width: '100%', minWidth: 0, height: '29px', padding: '0 7px', boxSizing: 'border-box',
-		border: '1px solid #65727b', background: '#11191f', color: '#f2f4f3', font: '12px Arial,sans-serif',
-	};
-	const floatingAddButtonStyle: CSSProperties = {
-		minWidth: '154px', height: '40px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '9px', padding: '0 13px',
-		cursor: 'pointer', font: '600 13px Arial,sans-serif', boxShadow: '0 4px 14px rgba(0,0,0,.42)',
-	};
-	const addPopoverStyle: CSSProperties = {
-		...popoverStyle, top: 'auto', bottom: '50px', left: 0, right: 'auto', transform: 'none', width: 'min(280px, calc(100vw - 40px))',
 	};
 	const screenshotPreviewHeight = Math.max(1, Math.round(506 * (editorPreview[0]?.height || 284) / (editorPreview[0]?.width || 506)));
 	const previewPanelSize = (index: number) => activeEditor?.kind === 'screenshot'
@@ -1477,20 +1512,44 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 			<div className="showcase-overlay-actions" style={{ position: 'absolute', top: '5px', right: '5px', display: 'flex', alignItems: 'center', gap: '6px', padding: '3px', borderRadius: '4px', background: 'rgba(12,17,21,.78)', backdropFilter: 'blur(4px)', pointerEvents: 'auto' }}>
 				<button type="button" style={buttonStyle} title={`Edit ${entry.title}`} aria-label={`Edit ${entry.title}`} onClick={() => openEditor(entry)}><Pencil size={14} />Edit</button>
 				<button type="button" style={{ ...buttonStyle, width: '30px', padding: 0, justifyContent: 'center', color: '#ffc0b5' }} title={`Remove ${entry.title}`} aria-label={`Remove ${entry.title}`} onClick={() => { removeShowcase(entry); if (editingId === entry.id) setEditingId(null); }}><Trash2 size={14} /></button>
-				{(hasTwoPanelImageEditor(entry.kind) || entry.kind === 'workshop') && entry.element.dataset.steamcanvasPublicScreenshots !== 'true' && ((entry.exportFiles?.length === getExportPanelCount(entry)) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
 			</div>
 		</div>, host, entry?.id || 'showcase-add-controls');
 	};
-	const renderAddControl = (host: HTMLElement) => createPortal(
-		<div style={{ position: 'relative' }}>
-			<button type="button" className="showcase-add-trigger" style={{ ...floatingAddButtonStyle, width: '100%' }} title="Add showcase" aria-label="Add showcase" onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}><Plus size={18} color="#ffffff" />Add showcase</button>
-			{addingOpen && <div style={addPopoverStyle} onClick={(event) => event.stopPropagation()}>
-				<div style={{ marginBottom: '10px', color: '#e9eef0', fontSize: '14px', fontWeight: 700 }}>Add a showcase</div>
-				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Showcase type</span><select style={fieldStyle} value={newShowcaseKind} onChange={(event) => setNewShowcaseKind(event.target.value as CreatableShowcaseKind)}><option value="artwork">Artwork</option><option value="featured-artwork">Featured artwork</option><option value="screenshot">Screenshot</option><option value="workshop">Workshop</option></select></label>
-				<button type="button" style={{ ...buttonStyle, width: '100%', marginTop: '2px', background: '#52752a', borderColor: '#789c42', color: '#ffffff' }} onClick={addShowcase}><Plus size={14} color="#ffffff" />Add</button>
-				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
-			</div>}
-		</div>, host, 'showcase-add-controls');
+	const renderAddControl = (host: HTMLElement, menuHost: HTMLElement) => {
+		const rect = host.getBoundingClientRect();
+		const menuWidth = Math.min(330, globalThis.innerWidth - 24);
+		const left = addDrawerLeft ?? Math.max(12, Math.min(rect.right + 10, globalThis.innerWidth - menuWidth - 12));
+		const top = addDrawerTop ?? Math.max(12, Math.min(rect.top - 5, globalThis.innerHeight - 350));
+		const options: Array<{ kind: CreatableShowcaseKind; title: string; description: string; icon: typeof ImagePlus }> = [
+			{ kind: 'artwork', title: 'Artwork showcase', description: 'Compose a main image with side panels', icon: ImagePlus },
+			{ kind: 'featured-artwork', title: 'Featured artwork', description: 'One large image as the centrepiece', icon: Star },
+			{ kind: 'screenshot', title: 'Screenshot showcase', description: 'Choose from this profile or upload art', icon: Camera },
+			{ kind: 'workshop', title: 'Workshop showcase', description: 'A row of five artwork panels', icon: Hammer },
+		];
+		return <>
+			{createPortal(
+				<div className="showcase-add-control">
+					<button type="button" className="showcase-add-trigger" title="Add showcase" aria-label="Add showcase" aria-expanded={addingOpen} onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}>
+						<Plus size={15} /><span>Add showcase</span>
+					</button>
+				</div>, host, 'showcase-add-controls')}
+			{addingOpen && createPortal(
+				<section ref={addMenuRef} className="showcase-add-drawer" style={{ left, top }} aria-label="Available showcases" onClick={(event) => event.stopPropagation()}>
+					<header>
+						<div><span>SHOWCASE LIBRARY</span><h2>Add to profile</h2></div>
+						<button type="button" className="showcase-add-close" aria-label="Close showcase library" onClick={() => setAddingOpen(false)}><X size={17} /></button>
+					</header>
+					<div className="showcase-add-options">
+						{options.map(({ kind, title, description, icon: Icon }) => <button key={kind} type="button" className="showcase-add-option" onClick={() => addShowcase(kind)}>
+							<span className="showcase-add-option-icon"><Icon size={18} /></span>
+							<span><strong>{title}</strong><small>{description}</small></span>
+							<Plus className="showcase-add-option-plus" size={15} />
+						</button>)}
+					</div>
+					{error && <p className="showcase-add-error" role="alert">{error}</p>}
+				</section>, menuHost, 'showcase-add-drawer')}
+		</>;
+	};
 	const renderTrash = (host: HTMLElement) => createPortal(
 		<div className="showcase-trash-control">
 			{trashOpen && <section className="showcase-trash-popover" aria-label="Removed original showcases">
@@ -1518,7 +1577,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 	if (!previewDocument) return null;
 	return <>
 		{entries.map((entry) => renderOverlay(entry, entry.host))}
-		{addControlHost && renderAddControl(addControlHost)}
+		{addControlHost && addMenuHost && renderAddControl(addControlHost, addMenuHost)}
 		{trashHost && removedShowcases.length > 0 && renderTrash(trashHost)}
 		<dialog
 			ref={editorDialogRef}
