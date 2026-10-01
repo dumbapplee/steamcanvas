@@ -12,8 +12,6 @@ type ShowcaseEntry = {
 	id: string;
 	kind: ShowcaseKind;
 	title: string;
-	artworkTitle: string;
-	artworkTitleHidden: boolean;
 	exportFiles?: Array<{ name: string; url: string }>;
 	animatedArtwork?: { name: string; url: string };
 	element: HTMLElement;
@@ -26,6 +24,7 @@ type ShowcaseEditorProps = {
 
 type ArtworkMosaic = {
 	images: string[];
+	previewImages?: string[];
 	panelDimensions?: Array<{ width: number; height: number }>;
 	animated?: { width: number; height: number; mainWidth: number; panelWidths?: number[]; panelRegions?: Array<{ x: number; y: number; width: number; height: number }>; format: 'gif' | 'apng' };
 };
@@ -93,10 +92,6 @@ function getExportPanelCount(entry: ShowcaseEntry): number {
 	return hasTwoPanelImageEditor(entry.kind) ? 2 : 0;
 }
 
-function getArtworkTitle(element: HTMLElement): string {
-	return element.querySelector<HTMLElement>('.screenshot_showcase_itemname')?.textContent || '';
-}
-
 function fitFeaturedImage(image: HTMLImageElement): void {
 	image.style.display = 'block';
 	image.style.width = '100%';
@@ -107,10 +102,6 @@ function fitFeaturedImage(image: HTMLImageElement): void {
 
 function fitFeaturedArtwork(element: HTMLElement): void {
 	element.querySelectorAll<HTMLImageElement>('.screenshot_showcase_primary.single img').forEach(fitFeaturedImage);
-}
-
-function isArtworkTitleHidden(title: string): boolean {
-	return !title.replace(/[\s\u00ad\u115f\u1160\u3164\u2800]/gu, '');
 }
 
 function makeImageSlot(document: Document, className: string, maxWidth: number): HTMLElement {
@@ -321,6 +312,7 @@ async function splitArtworkMosaic(file: File, layout: ArtworkLayout = 'main-side
 	if (file.type === 'image/gif' || file.type === 'image/apng' || /\.(gif|apng)$/i.test(file.name)) {
 		return {
 			images: Array(panelRegions.length).fill(dataUrl),
+			previewImages: cropImagePreview(image, compositeWidth, compositeHeight, panelRegions),
 			panelDimensions: panelRegions.map(({ width, height }) => ({ width, height })),
 			animated: {
 				width: compositeWidth,
@@ -373,7 +365,8 @@ async function splitWorkshopMosaic(file: File): Promise<ArtworkMosaic> {
 	const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
 	const isApng = file.type === 'image/apng' || /\.apng$/i.test(file.name);
 	if (isGif || isApng) {
-		return { images: Array(panelCount).fill(dataUrl), panelDimensions: panelWidths.map((panelWidth) => ({ width: panelWidth, height })), animated: { width, height, mainWidth: panelWidths[0], panelWidths, format: isGif ? 'gif' : 'apng' } };
+		const panelRegions = panelWidths.map((panelWidth, index) => ({ x: panelWidths.slice(0, index).reduce((sum, size) => sum + size, 0), y: 0, width: panelWidth, height }));
+		return { images: Array(panelCount).fill(dataUrl), previewImages: cropImagePreview(image, width, height, panelRegions), panelDimensions: panelWidths.map((panelWidth) => ({ width: panelWidth, height })), animated: { width, height, mainWidth: panelWidths[0], panelWidths, format: isGif ? 'gif' : 'apng' } };
 	}
 
 	const canvas = document.createElement('canvas');
@@ -629,6 +622,10 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			setAddControlHost(null);
 			return;
 		}
+		const dragStyle = previewDocument!.createElement('style');
+		dragStyle.dataset.steamcanvasDragCursor = 'true';
+		dragStyle.textContent = '[data-steamcanvas-draggable="true"]:hover,[data-steamcanvas-draggable="true"]:hover *{cursor:grab!important}[data-steamcanvas-draggable="true"][data-steamcanvas-dragging="true"],[data-steamcanvas-draggable="true"][data-steamcanvas-dragging="true"] *{cursor:grabbing!important}[data-steamcanvas-draggable="true"]:hover [data-steamcanvas-showcase-controls],[data-steamcanvas-draggable="true"]:hover [data-steamcanvas-showcase-controls] *{cursor:pointer!important}';
+		previewDocument!.head.append(dragStyle);
 
 		const nextEntries = [...area.children]
 			.filter((child) => child.classList.contains('profile_customization') && !child.classList.contains('customization_edit'))
@@ -638,11 +635,11 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				element.dataset.steamcanvasShowcaseId = id;
 				const title = element.querySelector<HTMLElement>('.profile_customization_header')?.textContent?.trim()
 					|| 'Profile showcase';
-				const artworkTitle = getArtworkTitle(element);
 				const kind = classifyShowcase(element);
+				element.dataset.steamcanvasDraggable = 'true';
 				const host = createOverlayHost(previewDocument!, element, id);
 				if (kind === 'featured-artwork') fitFeaturedArtwork(element);
-				return { id, kind, title, artworkTitle, artworkTitleHidden: isArtworkTitleHidden(artworkTitle), element, host };
+				return { id, kind, title, element, host };
 			});
 		setEntries(nextEntries);
 		const previewStage = previewDocument!.defaultView?.frameElement?.closest<HTMLElement>('.preview-stage');
@@ -652,7 +649,12 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		setAddingOpen(false);
 		setError('');
 		return () => {
-			nextEntries.forEach((entry) => entry.host.remove());
+			nextEntries.forEach((entry) => {
+				entry.host.remove();
+				delete entry.element.dataset.steamcanvasDraggable;
+				delete entry.element.dataset.steamcanvasDragging;
+			});
+			dragStyle.remove();
 			addHost?.remove();
 		};
 	}, [previewDocument]);
@@ -714,6 +716,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				element.style.display = originalDisplay;
 			}
 			ghost?.remove();
+			delete element.dataset.steamcanvasDragging;
 			previewDocument.documentElement.style.userSelect = originalUserSelect;
 			if (gesture.moved) globalThis.setTimeout(() => { suppressClickRef.current = false; }, 500);
 			pointerGestureRef.current = null;
@@ -728,6 +731,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			if (!gesture.moved) {
 				gesture.moved = true;
 				suppressClickRef.current = true;
+				gesture.element.dataset.steamcanvasDragging = 'true';
 				const rect = gesture.element.getBoundingClientRect();
 				const computed = previewDocument.defaultView?.getComputedStyle(gesture.element);
 				const placeholder = previewDocument.createElement('div');
@@ -872,7 +876,10 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 
 	function addShowcase() {
 		const area = getShowcaseArea(previewDocument, true);
-		if (!area) return;
+		if (!area) {
+			setError('Showcase area not found.');
+			return;
+		}
 		const element = newShowcaseKind === 'workshop'
 			? makeWorkshopShowcase(area.ownerDocument)
 			: newShowcaseKind === 'screenshot'
@@ -885,8 +892,9 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			: newShowcaseKind === 'screenshot'
 				? 'Screenshot Showcase'
 				: newShowcaseKind === 'featured-artwork' ? 'Featured Artwork Showcase' : 'Artwork Showcase';
+		element.dataset.steamcanvasDraggable = 'true';
 		const host = createOverlayHost(area.ownerDocument, element, id);
-		const entry: ShowcaseEntry = { id, kind: newShowcaseKind, title, artworkTitle: '', artworkTitleHidden: false, element, host };
+		const entry: ShowcaseEntry = { id, kind: newShowcaseKind, title, element, host };
 		const placeholder = [...area.children].find((child) => child.classList.contains('customization_edit')) || null;
 		area.insertBefore(element, placeholder);
 		const previewWindow = area.ownerDocument.defaultView;
@@ -937,10 +945,10 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				panels = await Promise.all(files.map((file) => file ? readPreviewPanel(file) : Promise.resolve(null)));
 			} else if (files[0] && hasTwoPanelImageEditor(entry.kind)) {
 				const mosaic = await splitArtworkMosaic(files[0], entry.kind === 'artwork' ? artworkLayout : 'main-side');
-				panels = mosaic.images.map((src, index) => ({ src, ...(mosaic.panelDimensions?.[index] || { width: 16, height: 9 }) }));
+				panels = mosaic.images.map((src, index) => ({ src: mosaic.previewImages?.[index] || src, ...(mosaic.panelDimensions?.[index] || { width: 16, height: 9 }) }));
 			} else if (files[0] && entry.kind === 'workshop') {
 				const mosaic = await splitWorkshopMosaic(files[0]);
-				panels = mosaic.images.map((src, index) => ({ src, ...(mosaic.panelDimensions?.[index] || { width: 1, height: 1 }) }));
+				panels = mosaic.images.map((src, index) => ({ src: mosaic.previewImages?.[index] || src, ...(mosaic.panelDimensions?.[index] || { width: 1, height: 1 }) }));
 			} else if (files[0]) {
 				panels = [await readPreviewPanel(files[0])];
 			} else {
@@ -957,36 +965,28 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		}
 	}
 
-	function selectCompositeImage(event: ChangeEvent<HTMLInputElement>) {
-		const file = event.target.files?.[0] || null;
+	function selectShowcaseFiles(event: ChangeEvent<HTMLInputElement>) {
+		const selected = [...(event.target.files || [])];
 		event.target.value = '';
-		if (!activeEditor || !file) return;
-		const files = [file];
-		setEditorFiles(files);
-		void updateEditorPreview(activeEditor, files, 'composite');
+		setShowcaseFiles(selected);
 	}
 
-	function setCompositeFile(file: File | null) {
-		if (!activeEditor || !file) return;
-		const files = [file];
+	function setShowcaseFiles(selected: File[]) {
+		if (!activeEditor) return;
+		const separate = selected.length > 1;
+		const mode = separate ? 'separate' : 'composite';
+		setImageInputMode(mode);
+		const files = separate
+			? Array.from({ length: editorPanelCount }, (_, index) => selected[index] || null)
+			: selected.slice(0, 1);
 		setEditorFiles(files);
-		void updateEditorPreview(activeEditor, files, 'composite');
-	}
-
-	function selectPanelImage(index: number, event: ChangeEvent<HTMLInputElement>) {
-		const file = event.target.files?.[0] || null;
-		event.target.value = '';
-		if (!activeEditor || !file) return;
-		const files = Array.from({ length: editorPanelCount }, (_, panelIndex) => panelIndex === index ? file : editorFiles[panelIndex] || null);
-		setEditorFiles(files);
-		void updateEditorPreview(activeEditor, files, 'separate');
-	}
-
-	function setPanelFile(index: number, file: File | null) {
-		if (!activeEditor || !file) return;
-		const files = Array.from({ length: editorPanelCount }, (_, panelIndex) => panelIndex === index ? file : editorFiles[panelIndex] || null);
-		setEditorFiles(files);
-		void updateEditorPreview(activeEditor, files, 'separate');
+		if (selected.length > editorPanelCount && separate) {
+			setEditorError(`This layout uses ${editorPanelCount} panels; ${selected.length} files were selected.`);
+			setEditorPreview([]);
+			return;
+		}
+		setEditorError('');
+		void updateEditorPreview(activeEditor, files, mode);
 	}
 
 	async function applyEditorChanges() {
@@ -1206,15 +1206,6 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		}
 	}
 
-	function toggleArtworkTitle(entry: ShowcaseEntry, hidden: boolean) {
-		const titleElement = entry.element.querySelector<HTMLElement>('.screenshot_showcase_itemname');
-		if (titleElement) {
-			titleElement.style.visibility = hidden ? 'hidden' : '';
-			if (hidden && !titleElement.textContent) titleElement.textContent = ' ';
-		}
-		setEntries((current) => current.map((item) => item.id === entry.id ? { ...item, artworkTitleHidden: hidden } : item));
-	}
-
 	const buttonStyle: CSSProperties = {
 		minHeight: '30px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '0 9px',
 		border: '1px solid rgba(220,225,228,.35)', borderRadius: '3px', background: 'rgba(18,25,31,.94)',
@@ -1248,6 +1239,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			: Math.max(...previewSizes.map((panel) => panel.height));
 	const previewAspectRatio = previewWidth / Math.max(1, previewHeight);
 	const previewRenderWidth = Math.min(480, 390 * previewAspectRatio);
+	const isAnimatedPreview = imageInputMode === 'composite' && /\.(gif|apng)$/i.test(editorFiles[0]?.name || '');
 	const previewStyle: CSSProperties = {
 		width: `min(100%, ${previewRenderWidth}px)`,
 		aspectRatio: `${previewWidth} / ${previewHeight}`,
@@ -1264,6 +1256,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		<div className="showcase-overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', outline: dragTargetShowcaseId === entry.id ? '3px solid #c9ef73' : hoveredShowcaseId === entry.id ? '2px solid rgba(201,239,115,.9)' : undefined, outlineOffset: '-2px', background: dragTargetShowcaseId === entry.id ? 'rgba(196,243,106,.1)' : hoveredShowcaseId === entry.id ? 'rgba(196,243,106,.035)' : undefined, transition: 'outline-color .12s ease, background .12s ease' }}>
 			<div className="showcase-overlay-actions" style={{ position: 'absolute', top: '5px', right: '5px', display: 'flex', alignItems: 'center', gap: '6px', padding: '3px', borderRadius: '4px', background: 'rgba(12,17,21,.78)', backdropFilter: 'blur(4px)', pointerEvents: 'auto' }}>
 				<button type="button" style={buttonStyle} title={`Edit ${entry.title}`} aria-label={`Edit ${entry.title}`} onClick={() => openEditor(entry)}><Pencil size={14} />Edit</button>
+				<button type="button" style={{ ...buttonStyle, width: '30px', padding: 0, justifyContent: 'center', color: '#ffc0b5' }} title={`Remove ${entry.title}`} aria-label={`Remove ${entry.title}`} onClick={() => { removeShowcase(entry); if (editingId === entry.id) setEditingId(null); }}><Trash2 size={14} /></button>
 				{(hasTwoPanelImageEditor(entry.kind) || entry.kind === 'workshop') && ((entry.exportFiles?.length === getExportPanelCount(entry)) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
 			</div>
 		</div>, host, entry?.id || 'showcase-add-controls');
@@ -1299,7 +1292,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				{activeEditor.kind !== 'other' && <>
 					<div className="showcase-editor-layout">
 						<div className="showcase-editor-preview" aria-busy={editorLoading}>
-							<div className="showcase-editor-preview-heading"><strong>Preview</strong><span>{activeEditor.kind === 'featured-artwork' ? 'Single image' : `${editorPanelCount} panels`}</span></div>
+							<div className="showcase-editor-preview-heading"><strong>Preview</strong><span>{isAnimatedPreview ? 'GIF · first frame' : activeEditor.kind === 'featured-artwork' ? 'Single image' : `${editorPanelCount} panels`}</span></div>
 							<div className={`showcase-editor-preview-panels ${activeEditor.kind === 'workshop' ? 'is-workshop' : activeEditor.kind === 'featured-artwork' ? 'is-featured' : editorPanelCount === 4 ? 'is-four-panel' : 'is-two-panel'}`} style={previewStyle}>
 								{activeEditor.kind === 'workshop'
 									? Array.from({ length: 5 }, (_, index) => renderPreviewPanel(index, `Panel ${index + 1}`))
@@ -1311,18 +1304,19 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 							</div>
 						</div>
 						<aside className="showcase-editor-controls">
-							{activeEditor.kind === 'artwork' && <div className="showcase-editor-control-group"><span className="showcase-editor-label">Artwork layout</span><div className="showcase-editor-layout-choice" role="group" aria-label="Artwork layout">
-								<button className={artworkLayout === 'main-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-side'} onClick={() => { setArtworkLayout('main-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-two"><i /><i /></span><span>Main + side</span></button>
-								<button className={artworkLayout === 'main-three-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-three-side'} onClick={() => { setArtworkLayout('main-three-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-four"><i /><i /><i /><i /></span><span>Main + 3 sides</span></button>
+							{activeEditor.kind === 'artwork' && <div className="showcase-editor-control-group"><span className="showcase-editor-label">LAYOUT</span><div className="showcase-editor-layout-choice" role="group" aria-label="Artwork layout">
+								<button className={artworkLayout === 'main-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-side'} onClick={() => { setArtworkLayout('main-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-two"><i /><i /></span><span className="showcase-layout-copy"><strong>Main + side</strong><small>2 panels</small></span></button>
+								<button className={artworkLayout === 'main-three-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-three-side'} onClick={() => { setArtworkLayout('main-three-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-four"><i /><i /><i /><i /></span><span className="showcase-layout-copy"><strong>Main + 3 sides</strong><small>4 panels</small></span></button>
 							</div></div>}
-							{activeEditor.kind === 'artwork' && <label className="showcase-editor-checkbox"><input type="checkbox" checked={activeEditor.artworkTitleHidden} onChange={(event) => toggleArtworkTitle(activeEditor, event.target.checked)} /> Hide item title in preview</label>}
-							{(hasTwoPanelImageEditor(activeEditor.kind) || activeEditor.kind === 'workshop') && <div className="showcase-editor-control-group"><span className="showcase-editor-label">Images</span><div className="showcase-editor-modes" role="group" aria-label="Image upload mode">
-								<button className={`showcase-editor-mode ${imageInputMode === 'composite' ? 'is-active' : ''}`} type="button" aria-pressed={imageInputMode === 'composite'} onClick={() => { setImageInputMode('composite'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><strong>One full image</strong><span>We cut it to fit the showcase</span></button>
-								<button className={`showcase-editor-mode ${imageInputMode === 'separate' ? 'is-active' : ''}`} type="button" aria-pressed={imageInputMode === 'separate'} onClick={() => { setImageInputMode('separate'); setEditorFiles(Array.from({ length: editorPanelCount }, () => null)); setEditorPreview(Array.from({ length: editorPanelCount }, () => null)); setEditorError(''); }}><strong>Separate panels</strong><span>Upload each piece in display order</span></button>
-							</div></div>}
-							{imageInputMode === 'composite' || !hasTwoPanelImageEditor(activeEditor.kind) && activeEditor.kind !== 'workshop'
-								? <label className="showcase-editor-upload" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setCompositeFile(event.dataTransfer.files[0] || null); }}><ImagePlus size={19} /><span><strong>{editorFiles[0]?.name || 'Choose or drop your image here'}</strong><small>PNG, JPG, WEBP, GIF, APNG or AVIF</small></span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" onChange={selectCompositeImage} /></label>
-								: <div className="showcase-editor-panel-upload-area"><p>Choose each panel in the order shown in the preview.</p><div className="showcase-editor-panel-uploads">{Array.from({ length: editorPanelCount }, (_, index) => <label className={`showcase-editor-panel-upload ${editorFiles[index] ? 'has-file' : ''}`} key={index} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setPanelFile(index, event.dataTransfer.files[0] || null); }}><span>{activeEditor.kind === 'workshop' ? `Panel ${index + 1}` : index === 0 ? 'Main panel' : editorPanelCount === 4 ? `Side panel ${index}` : 'Side panel'}</span><span>{editorFiles[index]?.name || 'Choose or drop image'}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" onChange={(event) => selectPanelImage(index, event)} /></label>)}</div><small className="showcase-editor-upload-progress">{editorFiles.filter(Boolean).length} of {editorPanelCount} panels selected</small></div>}
+							<label className={`showcase-editor-upload ${editorPanelCount > 1 ? 'is-multiple' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setShowcaseFiles([...event.dataTransfer.files]); }}>
+								<ImagePlus size={19} />
+								<span>
+									<strong>{editorFiles.filter(Boolean).length ? imageInputMode === 'separate' ? `${editorFiles.filter(Boolean).length} of ${editorPanelCount} panels ready` : editorFiles[0]?.name : editorPanelCount > 1 ? 'Drop one image or choose ready-made panels' : 'Drop or choose an image'}</strong>
+									<small>{editorPanelCount > 1 ? `One image is split automatically. Or select ${editorPanelCount} files in preview order.` : 'Image or animated GIF'}</small>
+									{imageInputMode === 'separate' && editorFiles.filter(Boolean).length > 0 && <small className="showcase-editor-file-list">{editorFiles.filter((file): file is File => !!file).map((file) => file.name).join(' · ')}</small>}
+								</span>
+								<input type="file" multiple={editorPanelCount > 1} accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" onChange={selectShowcaseFiles} />
+							</label>
 						</aside>
 					</div>
 				</>}
@@ -1343,4 +1337,22 @@ async function readPreviewPanel(file: File): Promise<PreviewPanel> {
 	image.src = src;
 	await image.decode();
 	return { src, width: image.naturalWidth, height: image.naturalHeight };
+}
+
+function cropImagePreview(image: HTMLImageElement, width: number, height: number, regions: Array<{ x: number; y: number; width: number; height: number }>): string[] {
+	const composite = document.createElement('canvas');
+	composite.width = width;
+	composite.height = height;
+	const context = composite.getContext('2d');
+	if (!context) throw new Error('Could not prepare the image preview.');
+	context.drawImage(image, 0, 0, width, height);
+	return regions.map(({ x, y, width: panelWidth, height: panelHeight }) => {
+		const panel = document.createElement('canvas');
+		panel.width = panelWidth;
+		panel.height = panelHeight;
+		const panelContext = panel.getContext('2d');
+		if (!panelContext) throw new Error('Could not prepare a panel preview.');
+		panelContext.drawImage(composite, x, y, panelWidth, panelHeight, 0, 0, panelWidth, panelHeight);
+		return panel.toDataURL('image/png');
+	});
 }
