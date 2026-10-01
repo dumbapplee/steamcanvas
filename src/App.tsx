@@ -5,6 +5,7 @@ import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFra
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
 import ProfileThemePicker, { type AppliedProfileTheme } from './components/ProfileThemePicker';
 import ShowcaseEditor, { type RemovedShowcase } from './components/ShowcaseEditor';
+import { ensureShowcaseArea } from './utils/showcaseArea';
 
 type ProfilePreview = {
   name: string;
@@ -81,14 +82,8 @@ function serializeShowcaseArea(document: Document): string {
 }
 
 function restoreShowcaseArea(document: Document, html: string): void {
-  const column = document.querySelector<HTMLElement>('.profile_leftcol');
-  if (!column) return;
-  let area = column.querySelector<HTMLElement>(':scope > .profile_customization_area');
-  if (!area) {
-    area = document.createElement('div');
-    area.className = 'profile_customization_area';
-    column.append(area);
-  }
+  const area = ensureShowcaseArea(document);
+  if (!area) return;
   const template = document.createElement('template');
   template.innerHTML = html;
   template.content.querySelectorAll('script, iframe, object, embed, form').forEach((element) => element.remove());

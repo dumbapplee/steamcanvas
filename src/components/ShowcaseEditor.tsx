@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
+import { ensureShowcaseArea } from '../utils/showcaseArea';
 import { Camera, ChevronLeft, ChevronRight, Download, Hammer, ImagePlus, LoaderCircle, Pencil, Plus, RotateCcw, Search, Star, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
@@ -86,12 +87,8 @@ function getShowcaseArea(document: Document | null, create = false): HTMLElement
 	const column = document?.querySelector<HTMLElement>('.profile_leftcol');
 	if (!column || !document) return null;
 	const existing = column.querySelector<HTMLElement>(':scope > .profile_customization_area');
-	if (existing || !create) return existing || null;
-
-	const area = document.createElement('div');
-	area.className = 'profile_customization_area';
-	column.append(area);
-	return area;
+	if (!create) return existing || null;
+	return ensureShowcaseArea(document);
 }
 
 function classifyShowcase(element: HTMLElement): ShowcaseKind {
