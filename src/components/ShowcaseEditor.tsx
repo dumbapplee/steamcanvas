@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { Camera, ChevronLeft, ChevronRight, Hammer, ImagePlus, LoaderCircle, Pencil, Plus, RotateCcw, Search, Star, Trash2, X } from 'lucide-react';
+import { Camera, ChevronLeft, ChevronRight, Download, Hammer, ImagePlus, LoaderCircle, Pencil, Plus, RotateCcw, Search, Star, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
@@ -626,6 +626,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	const [draggingShowcaseId, setDraggingShowcaseId] = useState<string | null>(null);
 	const [dragTargetShowcaseId, setDragTargetShowcaseId] = useState<string | null>(null);
 	const [hoveredShowcaseId, setHoveredShowcaseId] = useState<string | null>(null);
+	const [exportingShowcaseId, setExportingShowcaseId] = useState<string | null>(null);
+	const [showcaseExportError, setShowcaseExportError] = useState<{ id: string; message: string } | null>(null);
 	const editorDialogRef = useRef<HTMLDialogElement>(null);
 	const addMenuRef = useRef<HTMLElement>(null);
 	const previewRequestId = useRef(0);
@@ -916,46 +918,74 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		};
 	}, [entries, previewDocument]);
 
+	async function downloadShowcaseZip(exportableEntries: Array<{ entry: ShowcaseEntry; files: Array<{ name: string; url: string }>; index: number }>, filename: string) {
+		const folders: Record<ShowcaseKind, string> = {
+			artwork: 'Artwork Showcase',
+			'featured-artwork': 'Featured Artwork',
+			screenshot: 'Screenshots',
+			workshop: 'Workshop',
+			other: '',
+		};
+		const archive = new JSZip();
+		for (const { entry, files, index } of exportableEntries) {
+			const showcaseFolder = `${String(index + 1).padStart(2, '0')} - ${entry.title.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'Showcase'}`;
+			const folder = archive.folder(folders[entry.kind])?.folder(showcaseFolder);
+			if (!folder) continue;
+			for (const file of files) {
+				const response = await fetch(file.url);
+				if (!response.ok) throw new Error(`Could not read ${file.name}.`);
+				folder.file(file.name, await response.blob());
+			}
+		}
+		const blob = await archive.generateAsync({ type: 'blob' });
+		const url = URL.createObjectURL(blob);
+		const link = globalThis.document.createElement('a');
+		link.href = url;
+		link.download = filename;
+		globalThis.document.body.append(link);
+		link.click();
+		link.remove();
+		globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
+
+	function getExportableEntry(entry: ShowcaseEntry, index: number) {
+		if (entry.kind === 'other' || entry.element.dataset.steamcanvasPublicScreenshots === 'true') return null;
+		const files = entry.exportFiles || (entry.animatedArtwork ? [entry.animatedArtwork] : []);
+		return files.length ? { entry, files, index } : null;
+	}
+
+	async function exportSingleShowcase(entry: ShowcaseEntry) {
+		const index = entries.findIndex((item) => item.id === entry.id);
+		const exportableEntry = getExportableEntry(entry, index);
+		if (!exportableEntry || exportingShowcaseId) return;
+		setExportingShowcaseId(entry.id);
+		setShowcaseExportError(null);
+		try {
+			const baseName = profileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'steamcanvas';
+			const title = entry.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'showcase';
+			await downloadShowcaseZip([exportableEntry], `${baseName}-${title}.zip`);
+		} catch (caught) {
+			setShowcaseExportError({ id: entry.id, message: caught instanceof Error ? caught.message : 'Showcase ZIP export failed.' });
+		} finally {
+			setExportingShowcaseId(null);
+		}
+	}
+
 	useEffect(() => {
 		exportAssetsRef.current = async () => {
-			const folders: Record<ShowcaseKind, string> = {
-				artwork: 'Artwork Showcase',
-				'featured-artwork': 'Featured Artwork',
-				screenshot: 'Screenshots',
-				workshop: 'Workshop',
-				other: '',
-			};
-			const exportableEntries = entries.flatMap((entry, index) => {
-				if (entry.kind === 'other' || entry.element.dataset.steamcanvasPublicScreenshots === 'true') return [];
-				const files = entry.exportFiles || (entry.animatedArtwork ? [entry.animatedArtwork] : []);
-				return files.length ? [{ entry, files, index }] : [];
-			});
+			const exportableEntries = entries.map(getExportableEntry).filter((entry): entry is NonNullable<typeof entry> => !!entry);
 			if (!exportableEntries.length) throw new Error('No uploaded showcase artwork to export yet.');
-
-			const archive = new JSZip();
-			for (const { entry, files, index } of exportableEntries) {
-				const showcaseFolder = `${String(index + 1).padStart(2, '0')} - ${entry.title.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'Showcase'}`;
-				const folder = archive.folder(folders[entry.kind])?.folder(showcaseFolder);
-				if (!folder) continue;
-				for (const file of files) {
-					const response = await fetch(file.url);
-					if (!response.ok) throw new Error(`Could not read ${file.name}.`);
-					folder.file(file.name, await response.blob());
-				}
+			if (exportingShowcaseId) throw new Error('A showcase ZIP is already being prepared.');
+			setExportingShowcaseId('all');
+			try {
+				const baseName = profileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'steamcanvas';
+				await downloadShowcaseZip(exportableEntries, `${baseName}-showcase-artwork.zip`);
+			} finally {
+				setExportingShowcaseId(null);
 			}
-			const blob = await archive.generateAsync({ type: 'blob' });
-			const url = URL.createObjectURL(blob);
-			const link = globalThis.document.createElement('a');
-			const baseName = profileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'steamcanvas';
-			link.href = url;
-			link.download = `${baseName}-showcase-artwork.zip`;
-			globalThis.document.body.append(link);
-			link.click();
-			link.remove();
-			globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
 		};
 		return () => { exportAssetsRef.current = null; };
-	}, [entries, exportAssetsRef, profileName]);
+	}, [entries, exportAssetsRef, profileName, exportingShowcaseId]);
 
 	function syncOrder(nextEntries: ShowcaseEntry[]) {
 		const area = getShowcaseArea(previewDocument);
@@ -1507,12 +1537,16 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		{editorPreview[index]?.src ? <img src={editorPreview[index].src} alt={`Preview ${label.toLowerCase()}`} /> : <div className="showcase-editor-preview-empty">{editorLoading ? 'Preparing preview...' : 'Preview appears here'}</div>}
 	</div>;
 	const renderOverlay = (entry: ShowcaseEntry, host: HTMLElement) => {
+		const canExport = !!getExportableEntry(entry, entries.findIndex((item) => item.id === entry.id));
+		const isExporting = exportingShowcaseId === entry.id || exportingShowcaseId === 'all';
 		return createPortal(
 		<div className="showcase-overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', outline: dragTargetShowcaseId === entry.id ? '3px solid #c9ef73' : hoveredShowcaseId === entry.id ? '2px solid rgba(201,239,115,.9)' : undefined, outlineOffset: '-2px', background: dragTargetShowcaseId === entry.id ? 'rgba(196,243,106,.1)' : hoveredShowcaseId === entry.id ? 'rgba(196,243,106,.035)' : undefined, transition: 'outline-color .12s ease, background .12s ease' }}>
 			<div className="showcase-overlay-actions" style={{ position: 'absolute', top: '5px', right: '5px', display: 'flex', alignItems: 'center', gap: '6px', padding: '3px', borderRadius: '4px', background: 'rgba(12,17,21,.78)', backdropFilter: 'blur(4px)', pointerEvents: 'auto' }}>
 				<button type="button" style={buttonStyle} title={`Edit ${entry.title}`} aria-label={`Edit ${entry.title}`} onClick={() => openEditor(entry)}><Pencil size={14} />Edit</button>
+				{canExport && <button type="button" style={{ ...buttonStyle, width: '30px', padding: 0, justifyContent: 'center' }} title={isExporting ? 'Preparing showcase ZIP...' : `Download ${entry.title} as ZIP`} aria-label={`Download ${entry.title} as ZIP`} disabled={!!exportingShowcaseId} onClick={() => void exportSingleShowcase(entry)}>{isExporting ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}</button>}
 				<button type="button" style={{ ...buttonStyle, width: '30px', padding: 0, justifyContent: 'center', color: '#ffc0b5' }} title={`Remove ${entry.title}`} aria-label={`Remove ${entry.title}`} onClick={() => { removeShowcase(entry); if (editingId === entry.id) setEditingId(null); }}><Trash2 size={14} /></button>
 			</div>
+			{showcaseExportError?.id === entry.id && <div role="alert" style={{ position: 'absolute', top: '42px', right: '5px', maxWidth: '220px', padding: '5px 7px', borderRadius: '3px', background: 'rgba(80,24,20,.94)', color: '#fff', font: '11px Arial,sans-serif', pointerEvents: 'auto' }}>{showcaseExportError.message}</div>}
 		</div>, host, entry?.id || 'showcase-add-controls');
 	};
 	const renderAddControl = (host: HTMLElement, menuHost: HTMLElement) => {
