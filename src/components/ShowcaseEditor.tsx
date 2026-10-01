@@ -1,6 +1,6 @@
-import { useEffect, useState, type ChangeEvent, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDown, ArrowUp, Download, ImagePlus, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Download, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
@@ -26,8 +26,43 @@ type ShowcaseEditorProps = {
 
 type ArtworkMosaic = {
 	images: string[];
-	animated?: { width: number; height: number; mainWidth: number; panelWidths?: number[]; format: 'gif' | 'apng' };
+	panelDimensions?: Array<{ width: number; height: number }>;
+	animated?: { width: number; height: number; mainWidth: number; panelWidths?: number[]; panelRegions?: Array<{ x: number; y: number; width: number; height: number }>; format: 'gif' | 'apng' };
 };
+
+type PreviewPanel = { src: string; width: number; height: number };
+
+type ShowcasePointerGesture = {
+	id: string;
+	pointerId: number;
+	x: number;
+	y: number;
+	offsetX: number;
+	offsetY: number;
+	moved: boolean;
+	element: HTMLElement;
+	placeholder: HTMLElement | null;
+	ghost: HTMLElement | null;
+	originalDisplay: string;
+	originalUserSelect: string;
+};
+
+type ImageInputMode = 'composite' | 'separate';
+type ArtworkLayout = 'main-side' | 'main-three-side';
+
+function readImageFile(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Could not read image.'));
+		reader.onerror = () => reject(new Error('Could not read image.'));
+		reader.readAsDataURL(file);
+	});
+}
+
+function getImageExtension(file: File): string {
+	const extension = file.name.match(/\.(png|jpe?g|webp|gif|apng|avif)$/i)?.[1]?.toLowerCase();
+	return extension === 'jpeg' ? 'jpg' : extension || (file.type === 'image/gif' ? 'gif' : 'png');
+}
 
 function getShowcaseArea(document: Document | null, create = false): HTMLElement | null {
 	const column = document?.querySelector<HTMLElement>('.profile_leftcol');
@@ -50,6 +85,12 @@ function classifyShowcase(element: HTMLElement): ShowcaseKind {
 
 function hasTwoPanelImageEditor(kind: ShowcaseKind): boolean {
 	return kind === 'artwork' || kind === 'screenshot';
+}
+
+function getExportPanelCount(entry: ShowcaseEntry): number {
+	if (entry.kind === 'workshop') return 5;
+	if (entry.kind === 'artwork' && entry.element.dataset.steamcanvasMosaicPanels === '4') return 4;
+	return hasTwoPanelImageEditor(entry.kind) ? 2 : 0;
 }
 
 function getArtworkTitle(element: HTMLElement): string {
@@ -247,7 +288,7 @@ function makeWorkshopShowcase(document: Document): HTMLElement {
 	return showcase;
 }
 
-async function splitArtworkMosaic(file: File): Promise<ArtworkMosaic> {
+async function splitArtworkMosaic(file: File, layout: ArtworkLayout = 'main-side'): Promise<ArtworkMosaic> {
 	const dataUrl = await new Promise<string>((resolve, reject) => {
 		const reader = new FileReader();
 		reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Could not read artwork image.'));
@@ -266,13 +307,26 @@ async function splitArtworkMosaic(file: File): Promise<ArtworkMosaic> {
 	const compositeHeight = Math.max(1, Math.round(image.naturalHeight * scale));
 	const outputMainWidth = Math.max(1, Math.round(compositeWidth * mainWidth / showcaseWidth));
 	const sideWidth = Math.max(1, compositeWidth - outputMainWidth);
+	const sideCount = layout === 'main-three-side' ? 3 : 1;
+	const sideHeightEdges = Array.from({ length: sideCount + 1 }, (_, index) => Math.floor(index * compositeHeight / sideCount));
+	const panelRegions = [
+		{ x: 0, y: 0, width: outputMainWidth, height: compositeHeight },
+		...Array.from({ length: sideCount }, (_, index) => ({
+			x: outputMainWidth,
+			y: sideHeightEdges[index],
+			width: sideWidth,
+			height: Math.max(1, sideHeightEdges[index + 1] - sideHeightEdges[index]),
+		})),
+	];
 	if (file.type === 'image/gif' || file.type === 'image/apng' || /\.(gif|apng)$/i.test(file.name)) {
 		return {
-			images: [dataUrl, dataUrl],
+			images: Array(panelRegions.length).fill(dataUrl),
+			panelDimensions: panelRegions.map(({ width, height }) => ({ width, height })),
 			animated: {
 				width: compositeWidth,
 				height: compositeHeight,
 				mainWidth: outputMainWidth,
+				panelRegions,
 				format: file.type === 'image/gif' || /\.gif$/i.test(file.name) ? 'gif' : 'apng',
 			},
 		};
@@ -285,7 +339,7 @@ async function splitArtworkMosaic(file: File): Promise<ArtworkMosaic> {
 	if (!context) throw new Error('Could not prepare the artwork mosaic.');
 	context.drawImage(image, 0, 0, compositeWidth, compositeHeight);
 
-	const extractTile = (x: number, y: number, width: number, height: number) => {
+	const extractTile = ({ x, y, width, height }: typeof panelRegions[number]) => {
 		const tile = document.createElement('canvas');
 		tile.width = width;
 		tile.height = height;
@@ -296,10 +350,8 @@ async function splitArtworkMosaic(file: File): Promise<ArtworkMosaic> {
 	};
 
 	return {
-		images: [
-			extractTile(0, 0, outputMainWidth, compositeHeight),
-			extractTile(outputMainWidth, 0, sideWidth, compositeHeight),
-		],
+		images: panelRegions.map(extractTile),
+		panelDimensions: panelRegions.map(({ width, height }) => ({ width, height })),
 	};
 }
 
@@ -321,7 +373,7 @@ async function splitWorkshopMosaic(file: File): Promise<ArtworkMosaic> {
 	const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
 	const isApng = file.type === 'image/apng' || /\.apng$/i.test(file.name);
 	if (isGif || isApng) {
-		return { images: Array(panelCount).fill(dataUrl), animated: { width, height, mainWidth: panelWidths[0], panelWidths, format: isGif ? 'gif' : 'apng' } };
+		return { images: Array(panelCount).fill(dataUrl), panelDimensions: panelWidths.map((panelWidth) => ({ width: panelWidth, height })), animated: { width, height, mainWidth: panelWidths[0], panelWidths, format: isGif ? 'gif' : 'apng' } };
 	}
 
 	const canvas = document.createElement('canvas');
@@ -343,7 +395,7 @@ async function splitWorkshopMosaic(file: File): Promise<ArtworkMosaic> {
 		panels.push(panel.toDataURL('image/png'));
 		sourceX += panelWidth;
 	}
-	return { images: panels };
+	return { images: panels, panelDimensions: panelWidths.map((panelWidth) => ({ width: panelWidth, height })) };
 }
 
 function readBlobDataUrl(blob: Blob): Promise<string> {
@@ -372,12 +424,14 @@ async function encodeAnimatedMosaic(file: File, mosaic: NonNullable<ArtworkMosai
 	const patchContext = patchCanvas.getContext('2d');
 	if (!patchContext) throw new Error('Could not prepare animated artwork patches.');
 
-	const panelWidths = mosaic.panelWidths || [mosaic.mainWidth, mosaic.width - mosaic.mainWidth];
-	const encoders = panelWidths.map(() => GIFEncoder({ initialCapacity: Math.max(4096, mosaic.width * mosaic.height) }));
-	const panelCanvases = panelWidths.map((width) => {
+	const panelRegions = mosaic.panelRegions || (mosaic.panelWidths || [mosaic.mainWidth, mosaic.width - mosaic.mainWidth]).map((width, index, widths) => ({
+		x: widths.slice(0, index).reduce((total, value) => total + value, 0), y: 0, width, height: mosaic.height,
+	}));
+	const encoders = panelRegions.map((region) => GIFEncoder({ initialCapacity: Math.max(4096, region.width * region.height) }));
+	const panelCanvases = panelRegions.map((region) => {
 		const canvas = document.createElement('canvas');
-		canvas.width = width;
-		canvas.height = mosaic.height;
+		canvas.width = region.width;
+		canvas.height = region.height;
 		return canvas;
 	});
 	const panelContexts = panelCanvases.map((canvas) => canvas.getContext('2d', { willReadFrequently: true }));
@@ -483,12 +537,12 @@ async function encodeAnimatedMosaic(file: File, mosaic: NonNullable<ArtworkMosai
 		for (let panelIndex = 0; panelIndex < panelCanvases.length; panelIndex += 1) {
 			const panelContext = panelContexts[panelIndex];
 			if (!panelContext) continue;
-			const sourceX = panelWidths.slice(0, panelIndex).reduce((total, width) => total + width, 0);
-			panelContext.clearRect(0, 0, panelCanvases[panelIndex].width, mosaic.height);
-			panelContext.drawImage(mainCanvas, sourceX, 0, panelCanvases[panelIndex].width, mosaic.height, 0, 0, panelCanvases[panelIndex].width, mosaic.height);
-			const pixels = panelContext.getImageData(0, 0, panelCanvases[panelIndex].width, mosaic.height).data;
+			const region = panelRegions[panelIndex];
+			panelContext.clearRect(0, 0, region.width, region.height);
+			panelContext.drawImage(mainCanvas, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
+			const pixels = panelContext.getImageData(0, 0, region.width, region.height).data;
 			const { palette, indexed, transparentIndex } = indexFrame(pixels);
-			encoders[panelIndex].writeFrame(indexed, panelCanvases[panelIndex].width, mosaic.height, {
+			encoders[panelIndex].writeFrame(indexed, region.width, region.height, {
 				palette,
 				delay: frame.delay || 100,
 				...(frameIndex === 0 ? { repeat: 0 } : {}),
@@ -515,14 +569,28 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 	const [newShowcaseKind, setNewShowcaseKind] = useState<CreatableShowcaseKind>('artwork');
 	const [error, setError] = useState('');
 	const [editingId, setEditingId] = useState<string | null>(null);
+	const [imageInputMode, setImageInputMode] = useState<ImageInputMode>('composite');
+	const [artworkLayout, setArtworkLayout] = useState<ArtworkLayout>('main-side');
+	const [editorFiles, setEditorFiles] = useState<Array<File | null>>([]);
+	const [editorPreview, setEditorPreview] = useState<Array<PreviewPanel | null>>([]);
+	const [editorLoading, setEditorLoading] = useState(false);
+	const [editorError, setEditorError] = useState('');
 	const [addingOpen, setAddingOpen] = useState(false);
 	const [addControlHost, setAddControlHost] = useState<HTMLElement | null>(null);
+	const [draggingShowcaseId, setDraggingShowcaseId] = useState<string | null>(null);
+	const [dragTargetShowcaseId, setDragTargetShowcaseId] = useState<string | null>(null);
+	const [hoveredShowcaseId, setHoveredShowcaseId] = useState<string | null>(null);
+	const editorDialogRef = useRef<HTMLDialogElement>(null);
+	const previewRequestId = useRef(0);
+	const dragTargetRef = useRef<{ id: string | null; after: boolean }>({ id: null, after: false });
+	const pointerGestureRef = useRef<ShowcasePointerGesture | null>(null);
+	const suppressClickRef = useRef(false);
 
 	function createOverlayHost(document: Document, parent: HTMLElement, name: string): HTMLElement {
 		if (document.defaultView?.getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
 		const host = document.createElement('div');
 		host.dataset.steamcanvasShowcaseControls = name;
-		host.style.cssText = 'position:absolute;top:5px;right:5px;z-index:2147483000;display:block;pointer-events:auto;';
+		host.style.cssText = 'position:absolute;inset:0;z-index:2147483000;display:block;pointer-events:none;';
 		parent.append(host);
 		return host;
 	}
@@ -627,27 +695,152 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 	}, [addingOpen, addControlHost, previewDocument]);
 
 	useEffect(() => {
-		const activeEntry = entries.find((entry) => entry.id === editingId);
-		if (!activeEntry || !previewDocument) return;
-		const editRegion = activeEntry.host.querySelector<HTMLElement>('[data-showcase-edit-region]');
-		const closeOnOutside = (event: Event) => {
-			const target = event.target as Node | null;
-			if (target && editRegion?.contains(target)) return;
-			setEditingId(null);
+		const dialog = editorDialogRef.current;
+		if (!dialog) return;
+		if (editingId && !dialog.open) dialog.showModal();
+		if (!editingId && dialog.open) dialog.close();
+	}, [editingId]);
+
+	useEffect(() => {
+		if (!previewDocument) return;
+		const finishGesture = (gesture: ShowcasePointerGesture, commit: boolean) => {
+			const { element, placeholder, ghost, originalDisplay, originalUserSelect } = gesture;
+			if (commit && gesture.moved) {
+				element.style.display = originalDisplay;
+				placeholder?.remove();
+				dropShowcaseOn(dragTargetRef.current.id, dragTargetRef.current.after, gesture.id);
+			} else {
+				placeholder?.remove();
+				element.style.display = originalDisplay;
+			}
+			ghost?.remove();
+			previewDocument.documentElement.style.userSelect = originalUserSelect;
+			if (gesture.moved) globalThis.setTimeout(() => { suppressClickRef.current = false; }, 500);
+			pointerGestureRef.current = null;
+			dragTargetRef.current = { id: null, after: false };
+			setDraggingShowcaseId(null);
+			setDragTargetShowcaseId(null);
 		};
-		const closeOnEscape = (event: KeyboardEvent) => {
-			if (event.key === 'Escape') setEditingId(null);
+		const onPointerMove = (event: PointerEvent) => {
+			const gesture = pointerGestureRef.current;
+			if (!gesture || gesture.pointerId !== event.pointerId) return;
+			if (!gesture.moved && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 7) return;
+			if (!gesture.moved) {
+				gesture.moved = true;
+				suppressClickRef.current = true;
+				const rect = gesture.element.getBoundingClientRect();
+				const computed = previewDocument.defaultView?.getComputedStyle(gesture.element);
+				const placeholder = previewDocument.createElement('div');
+				placeholder.className = gesture.element.className;
+				placeholder.dataset.steamcanvasDragPlaceholder = 'true';
+				placeholder.setAttribute('aria-hidden', 'true');
+				placeholder.style.cssText = `box-sizing:border-box;width:${rect.width}px;height:${rect.height}px;min-height:${rect.height}px;margin:${computed?.margin || '0'};border:1px dashed rgba(126,155,61,.72);border-radius:3px;background:rgba(196,243,106,.12);transition:transform .16s ease,margin .16s ease;`;
+				gesture.element.parentElement?.insertBefore(placeholder, gesture.element);
+				gesture.placeholder = placeholder;
+				const ghost = gesture.element.cloneNode(true) as HTMLElement;
+				ghost.querySelectorAll('[data-steamcanvas-showcase-controls]').forEach((control) => control.remove());
+				ghost.querySelectorAll('img').forEach((image) => { image.draggable = false; });
+				ghost.style.cssText += `;position:fixed!important;left:${rect.left}px!important;top:${rect.top}px!important;width:${rect.width}px!important;height:${rect.height}px!important;margin:0!important;z-index:2147483647!important;opacity:.94!important;pointer-events:none!important;transform:scale(1.025)!important;transform-origin:center!important;box-shadow:0 20px 48px rgba(0,0,0,.42)!important;transition:box-shadow .14s ease,transform .14s ease!important;`;
+				previewDocument.body.append(ghost);
+				gesture.ghost = ghost;
+				gesture.element.style.display = 'none';
+				previewDocument.documentElement.style.userSelect = 'none';
+				setDraggingShowcaseId(gesture.id);
+			}
+			if (gesture.ghost) {
+				gesture.ghost.style.left = `${event.clientX - gesture.offsetX}px`;
+				gesture.ghost.style.top = `${event.clientY - gesture.offsetY}px`;
+			}
+			const nearest = entries
+				.filter((entry) => entry.id !== gesture.id)
+				.map((entry) => ({ entry, rect: entry.element.getBoundingClientRect() }))
+				.sort((left, right) => Math.abs(left.rect.top + left.rect.height / 2 - event.clientY) - Math.abs(right.rect.top + right.rect.height / 2 - event.clientY))[0];
+			const id = nearest?.entry.id || null;
+			const after = nearest ? event.clientY >= nearest.rect.top + nearest.rect.height / 2 : false;
+			dragTargetRef.current = { id, after };
+			setDragTargetShowcaseId(id);
+			if (nearest && gesture.placeholder) {
+				const parent = nearest.entry.element.parentElement;
+				const reference = after ? nearest.entry.element.nextSibling : nearest.entry.element;
+				if (parent && reference !== gesture.placeholder) {
+					const previousTops = new Map(entries.filter((entry) => entry.id !== gesture.id).map((entry) => [entry.element, entry.element.getBoundingClientRect().top]));
+					parent.insertBefore(gesture.placeholder, reference);
+					for (const [element, previousTop] of previousTops) {
+						const deltaY = previousTop - element.getBoundingClientRect().top;
+						if (Math.abs(deltaY) < 1) continue;
+						element.getAnimations().forEach((animation) => animation.cancel());
+						element.animate([{ transform: `translateY(${deltaY}px)` }, { transform: 'translateY(0)' }], { duration: 190, easing: 'cubic-bezier(.2,.75,.25,1)' });
+					}
+				}
+			}
+			event.preventDefault();
 		};
-		const documents = new Set([activeEntry.host.ownerDocument, previewDocument, addControlHost?.ownerDocument].filter((document): document is Document => !!document));
-		documents.forEach((document) => {
-			document.addEventListener('pointerdown', closeOnOutside, true);
-			document.addEventListener('keydown', closeOnEscape, true);
+		const onPointerUp = (event: PointerEvent) => {
+			const gesture = pointerGestureRef.current;
+			if (!gesture || gesture.pointerId !== event.pointerId) return;
+			finishGesture(gesture, true);
+		};
+		const onPointerCancel = (event: PointerEvent) => {
+			const gesture = pointerGestureRef.current;
+			if (gesture?.pointerId === event.pointerId) finishGesture(gesture, false);
+		};
+		const onClick = (event: MouseEvent) => {
+			if (!suppressClickRef.current) return;
+			suppressClickRef.current = false;
+			event.preventDefault();
+			event.stopPropagation();
+		};
+		const handlers = entries.map((entry) => {
+			const onPointerDown = (event: PointerEvent) => {
+				if (event.button !== 0 || (event.target as Element | null)?.closest('[data-steamcanvas-showcase-controls]')) return;
+				try {
+					entry.element.setPointerCapture(event.pointerId);
+				} catch {}
+				const originalUserSelect = previewDocument.documentElement.style.userSelect;
+				previewDocument.documentElement.style.userSelect = 'none';
+				const rect = entry.element.getBoundingClientRect();
+				pointerGestureRef.current = {
+					id: entry.id,
+					pointerId: event.pointerId,
+					x: event.clientX,
+					y: event.clientY,
+					offsetX: event.clientX - rect.left,
+					offsetY: event.clientY - rect.top,
+					moved: false,
+					element: entry.element,
+					placeholder: null,
+					ghost: null,
+					originalDisplay: entry.element.style.display,
+					originalUserSelect,
+				};
+				setHoveredShowcaseId(entry.id);
+			};
+			const onDragStart = (event: DragEvent) => event.preventDefault();
+			const onEnter = () => setHoveredShowcaseId(entry.id);
+			const onLeave = () => setHoveredShowcaseId((current) => current === entry.id ? null : current);
+			entry.element.addEventListener('pointerdown', onPointerDown);
+			entry.element.addEventListener('dragstart', onDragStart);
+			entry.element.addEventListener('mouseenter', onEnter);
+			entry.element.addEventListener('mouseleave', onLeave);
+			return () => {
+				entry.element.removeEventListener('pointerdown', onPointerDown);
+				entry.element.removeEventListener('dragstart', onDragStart);
+				entry.element.removeEventListener('mouseenter', onEnter);
+				entry.element.removeEventListener('mouseleave', onLeave);
+			};
 		});
-		return () => documents.forEach((document) => {
-			document.removeEventListener('pointerdown', closeOnOutside, true);
-			document.removeEventListener('keydown', closeOnEscape, true);
-		});
-	}, [editingId, entries, previewDocument, addControlHost]);
+		previewDocument.addEventListener('pointermove', onPointerMove, true);
+		previewDocument.addEventListener('pointerup', onPointerUp, true);
+		previewDocument.addEventListener('pointercancel', onPointerCancel, true);
+		previewDocument.addEventListener('click', onClick, true);
+		return () => {
+			handlers.forEach((cleanup) => cleanup());
+			previewDocument.removeEventListener('pointermove', onPointerMove, true);
+			previewDocument.removeEventListener('pointerup', onPointerUp, true);
+			previewDocument.removeEventListener('pointercancel', onPointerCancel, true);
+			previewDocument.removeEventListener('click', onClick, true);
+		};
+	}, [entries, previewDocument]);
 
 	function syncOrder(nextEntries: ShowcaseEntry[]) {
 		const area = getShowcaseArea(previewDocument);
@@ -657,12 +850,19 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		setEntries(nextEntries);
 	}
 
-	function moveShowcase(index: number, offset: -1 | 1) {
-		const nextIndex = index + offset;
-		if (nextIndex < 0 || nextIndex >= entries.length) return;
+	function dropShowcaseOn(targetId: string | null, after = false, sourceId = draggingShowcaseId) {
+		if (!targetId) return;
+		if (!sourceId || sourceId === targetId) return;
 		const nextEntries = [...entries];
-		[nextEntries[index], nextEntries[nextIndex]] = [nextEntries[nextIndex], nextEntries[index]];
+		const fromIndex = nextEntries.findIndex((entry) => entry.id === sourceId);
+		const toIndex = nextEntries.findIndex((entry) => entry.id === targetId);
+		if (fromIndex < 0 || toIndex < 0) return;
+		const [moved] = nextEntries.splice(fromIndex, 1);
+		const targetIndex = toIndex - (fromIndex < toIndex ? 1 : 0);
+		nextEntries.splice(targetIndex + (after ? 1 : 0), 0, moved);
 		syncOrder(nextEntries);
+		setDraggingShowcaseId(null);
+		setDragTargetShowcaseId(null);
 	}
 
 	function removeShowcase(entry: ShowcaseEntry) {
@@ -700,21 +900,136 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		setError('');
 	}
 
-	async function updateArtwork(entry: ShowcaseEntry, event: ChangeEvent<HTMLInputElement>) {
-		const files = [...(event.target.files || [])];
+	const activeEditor = entries.find((entry) => entry.id === editingId) || null;
+	const editorPanelCount = activeEditor?.kind === 'workshop'
+		? 5
+		: activeEditor?.kind === 'artwork' && artworkLayout === 'main-three-side'
+			? 4
+			: hasTwoPanelImageEditor(activeEditor?.kind || 'other') ? 2 : 1;
+
+	function openEditor(entry: ShowcaseEntry) {
+		const savedLayout = entry.element.dataset.steamcanvasMosaicPanels === '4' ? 'main-three-side' : 'main-side';
+		setArtworkLayout(savedLayout);
+		const panelCount = entry.kind === 'workshop' ? 5 : entry.kind === 'artwork' && savedLayout === 'main-three-side' ? 4 : hasTwoPanelImageEditor(entry.kind) ? 2 : 1;
+		const currentImages = [...entry.element.querySelectorAll<HTMLImageElement>(entry.kind === 'workshop'
+			? '.myworkshop_showcase .workshop_showcase_item_image'
+			: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot.showcase_slot img')];
+		setImageInputMode('composite');
+		setEditorFiles([]);
+		setEditorPreview(currentImages.slice(0, panelCount).map((image) => ({
+			src: image.currentSrc || image.src,
+			width: image.naturalWidth || image.width || 16,
+			height: image.naturalHeight || image.height || 9,
+		})));
+		setEditorLoading(false);
+		setEditorError('');
+		setAddingOpen(false);
+		setEditingId(entry.id);
+	}
+
+	async function updateEditorPreview(entry: ShowcaseEntry, files: Array<File | null>, mode: ImageInputMode) {
+		const requestId = ++previewRequestId.current;
+		setEditorLoading(true);
+		setEditorError('');
+		try {
+			let panels: Array<PreviewPanel | null>;
+			if (mode === 'separate') {
+				panels = await Promise.all(files.map((file) => file ? readPreviewPanel(file) : Promise.resolve(null)));
+			} else if (files[0] && hasTwoPanelImageEditor(entry.kind)) {
+				const mosaic = await splitArtworkMosaic(files[0], entry.kind === 'artwork' ? artworkLayout : 'main-side');
+				panels = mosaic.images.map((src, index) => ({ src, ...(mosaic.panelDimensions?.[index] || { width: 16, height: 9 }) }));
+			} else if (files[0] && entry.kind === 'workshop') {
+				const mosaic = await splitWorkshopMosaic(files[0]);
+				panels = mosaic.images.map((src, index) => ({ src, ...(mosaic.panelDimensions?.[index] || { width: 1, height: 1 }) }));
+			} else if (files[0]) {
+				panels = [await readPreviewPanel(files[0])];
+			} else {
+				panels = [];
+			}
+			if (previewRequestId.current === requestId) setEditorPreview(panels);
+		} catch (caught) {
+			if (previewRequestId.current === requestId) {
+				setEditorError(caught instanceof Error ? caught.message : 'Could not prepare the image preview.');
+				setEditorPreview([]);
+			}
+		} finally {
+			if (previewRequestId.current === requestId) setEditorLoading(false);
+		}
+	}
+
+	function selectCompositeImage(event: ChangeEvent<HTMLInputElement>) {
+		const file = event.target.files?.[0] || null;
 		event.target.value = '';
-		if (!files.length) return;
+		if (!activeEditor || !file) return;
+		const files = [file];
+		setEditorFiles(files);
+		void updateEditorPreview(activeEditor, files, 'composite');
+	}
+
+	function setCompositeFile(file: File | null) {
+		if (!activeEditor || !file) return;
+		const files = [file];
+		setEditorFiles(files);
+		void updateEditorPreview(activeEditor, files, 'composite');
+	}
+
+	function selectPanelImage(index: number, event: ChangeEvent<HTMLInputElement>) {
+		const file = event.target.files?.[0] || null;
+		event.target.value = '';
+		if (!activeEditor || !file) return;
+		const files = Array.from({ length: editorPanelCount }, (_, panelIndex) => panelIndex === index ? file : editorFiles[panelIndex] || null);
+		setEditorFiles(files);
+		void updateEditorPreview(activeEditor, files, 'separate');
+	}
+
+	function setPanelFile(index: number, file: File | null) {
+		if (!activeEditor || !file) return;
+		const files = Array.from({ length: editorPanelCount }, (_, panelIndex) => panelIndex === index ? file : editorFiles[panelIndex] || null);
+		setEditorFiles(files);
+		void updateEditorPreview(activeEditor, files, 'separate');
+	}
+
+	async function applyEditorChanges() {
+		if (!activeEditor) return;
+		const files = editorFiles.filter((file): file is File => file !== null);
+		const expectedFiles = imageInputMode === 'separate' ? editorPanelCount : 1;
+		if (files.length !== expectedFiles || editorLoading || editorError) return;
+		setEditorLoading(true);
+		const applied = await updateArtwork(activeEditor, files);
+		setEditorLoading(false);
+		if (applied) setEditingId(null);
+	}
+
+	async function updateArtwork(entry: ShowcaseEntry, files: File[]): Promise<boolean> {
+		if (!files.length) return false;
 		if (files.some((file) => !/^image\/(png|jpeg|webp|gif|avif|apng)$/.test(file.type))) {
-			setError('Choose PNG, JPG, WEBP, GIF, APNG, or AVIF artwork.');
-			return;
+			setEditorError('Choose PNG, JPG, WEBP, GIF, APNG, or AVIF images.');
+			return false;
+		}
+		const panelCount = entry.kind === 'workshop' ? 5 : entry.kind === 'artwork' && artworkLayout === 'main-three-side' ? 4 : hasTwoPanelImageEditor(entry.kind) ? 2 : 1;
+		const separateUploads = panelCount > 1 && files.length === panelCount;
+		if (files.length !== 1 && !separateUploads) {
+			setEditorError(`Choose one complete image or exactly ${panelCount} separate panels.`);
+			return false;
+		}
+		if (hasTwoPanelImageEditor(entry.kind)) {
+			const rightColumn = entry.element.querySelector<HTMLElement>('.screenshot_showcase_rightcol');
+			if (rightColumn) {
+				const sideSlots = [...rightColumn.querySelectorAll<HTMLElement>('.screenshot_showcase_smallscreenshot.showcase_slot')];
+				for (let index = sideSlots.length; index < panelCount - 1; index += 1) {
+					rightColumn.insertBefore(makeImageSlot(entry.element.ownerDocument, 'screenshot_showcase_smallscreenshot showcase_slot', 100), rightColumn.querySelector('.screenshot_count'));
+				}
+			}
 		}
 		const images = [...entry.element.querySelectorAll<HTMLImageElement>(entry.kind === 'workshop'
 			? '.myworkshop_showcase .workshop_showcase_item_image'
 			: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot img')];
 		try {
 			let exportWarning = false;
-			const mosaic = hasTwoPanelImageEditor(entry.kind)
-				? await splitArtworkMosaic(files[0])
+			const mosaic = separateUploads
+				? { images: await Promise.all(files.map(readImageFile)) }
+				: hasTwoPanelImageEditor(entry.kind)
+				? await splitArtworkMosaic(files[0], entry.kind === 'artwork' ? artworkLayout : 'main-side')
 				: entry.kind === 'workshop'
 					? await splitWorkshopMosaic(files[0])
 					: { images: [await new Promise<string>((resolve, reject) => {
@@ -752,32 +1067,34 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				if (mosaic.animated && anchor) {
 					anchor.style.display = 'block';
 					anchor.style.overflow = 'hidden';
-					anchor.style.height = `${mosaic.animated.height}px`;
-					anchor.style.width = entry.kind === 'workshop' ? '100%' : index === 0 ? '100%' : '100px';
-					image.style.width = `${entry.kind === 'workshop' ? mosaic.animated.width : mosaic.animated.width}px`;
+					const panelRegions = mosaic.animated.panelRegions || (mosaic.animated.panelWidths || [mosaic.animated.mainWidth, mosaic.animated.width - mosaic.animated.mainWidth]).map((width, panelIndex, widths) => ({
+						x: widths.slice(0, panelIndex).reduce((total, value) => total + value, 0), y: 0, width, height: mosaic.animated!.height,
+					}));
+					const region = panelRegions[index];
+					anchor.style.height = `${region.height}px`;
+					anchor.style.width = entry.kind === 'workshop' || index === 0 ? '100%' : `${region.width}px`;
+					image.style.width = `${mosaic.animated.width}px`;
+					image.style.height = `${mosaic.animated.height}px`;
 					image.style.maxWidth = 'none';
 					image.style.minHeight = '0';
 					image.style.objectFit = 'fill';
-					const panelWidths = mosaic.animated.panelWidths || [mosaic.animated.mainWidth, mosaic.animated.width - mosaic.animated.mainWidth];
-					const panelOffset = panelWidths.slice(0, index).reduce((total, width) => total + width, 0);
-					image.style.transform = panelOffset ? `translateX(-${panelOffset}px)` : 'none';
+					image.style.transform = region.x || region.y ? `translate(${-region.x}px, ${-region.y}px)` : 'none';
 					image.style.transformOrigin = 'top left';
 				}
 			}
 			if (hasTwoPanelImageEditor(entry.kind)) {
 				const sideSlots = [...entry.element.querySelectorAll<HTMLElement>('.screenshot_showcase_smallscreenshot.showcase_slot')];
-				sideSlots.slice(1).forEach((slot) => slot.remove());
+				const panelCount = entry.kind === 'artwork' && artworkLayout === 'main-three-side' ? 4 : 2;
+				sideSlots.slice(panelCount - 1).forEach((slot) => slot.remove());
 				entry.element.dataset.steamcanvasMosaic = 'true';
+				entry.element.dataset.steamcanvasMosaicPanels = String(panelCount);
 				const baseName = files[0].name.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || (entry.kind === 'screenshot' ? 'steam-screenshot' : 'steam-artwork');
 				if (mosaic.animated?.format === 'gif') {
 					try {
 						const gifPanels = await encodeAnimatedMosaic(files[0], mosaic.animated);
 						setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
 							...item,
-							exportFiles: [
-								{ name: `${baseName}-main.gif`, url: gifPanels[0] },
-								{ name: `${baseName}-side.gif`, url: gifPanels[1] },
-							],
+							exportFiles: gifPanels.map((url, index) => ({ name: `${baseName}-${index === 0 ? 'main' : panelCount === 2 ? 'side' : `side-${index}`}.gif`, url })),
 							animatedArtwork: undefined,
 						}));
 					} catch (caught) {
@@ -799,10 +1116,10 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				} else {
 					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
 						...item,
-						exportFiles: [
-							{ name: `${baseName}-main.png`, url: mosaic.images[0] },
-							{ name: `${baseName}-side.png`, url: mosaic.images[1] },
-						],
+						exportFiles: mosaic.images.map((url, index) => ({
+							name: `${baseName}-${index === 0 ? 'main' : panelCount === 2 ? 'side' : `side-${index}`}.${separateUploads ? getImageExtension(files[index]) : 'png'}`,
+							url,
+						})),
 						animatedArtwork: undefined,
 					}));
 				}
@@ -836,19 +1153,24 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				} else {
 					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
 						...item,
-						exportFiles: mosaic.images.map((url, index) => ({ name: `${baseName}-${index + 1}.png`, url })),
+						exportFiles: mosaic.images.map((url, index) => ({ name: `${baseName}-${index + 1}.${separateUploads ? getImageExtension(files[index]) : 'png'}`, url })),
 						animatedArtwork: undefined,
 					}));
 				}
 			}
-			if (!exportWarning) setError('');
+			if (!exportWarning) {
+				setError('');
+				setEditorError('');
+			}
+			return true;
 		} catch (caught) {
-			setError(caught instanceof Error ? caught.message : 'Could not load artwork images.');
+			setEditorError(caught instanceof Error ? caught.message : 'Could not prepare these images.');
+			return false;
 		}
 	}
 
 	async function downloadArtwork(entry: ShowcaseEntry) {
-		if (entry.exportFiles?.length === (entry.kind === 'workshop' ? 5 : 2)) {
+		if (entry.exportFiles?.length === getExportPanelCount(entry)) {
 			try {
 				const archive = new JSZip();
 				for (const file of entry.exportFiles) {
@@ -858,7 +1180,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				}
 				const blob = await archive.generateAsync({ type: 'blob' });
 				const url = URL.createObjectURL(blob);
-				const baseName = entry.exportFiles[0].name.replace(/-(?:main|side|[1-5])\.(?:png|gif)$/i, '') || 'steam-artwork';
+				const baseName = entry.exportFiles[0].name.replace(/-(?:main|side(?:-\d+)?|[1-5])\.(?:png|jpe?g|webp|gif|apng|avif)$/i, '') || 'steam-artwork';
 				const link = globalThis.document.createElement('a');
 				link.href = url;
 				link.download = `${baseName}.zip`;
@@ -882,17 +1204,6 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			link.click();
 			link.remove();
 		}
-	}
-
-	function updateArtworkTitle(entry: ShowcaseEntry, title: string) {
-		const titleElement = entry.element.querySelector<HTMLElement>('.screenshot_showcase_itemname');
-		if (titleElement) {
-			titleElement.textContent = title;
-			titleElement.style.visibility = title.trim() ? 'visible' : '';
-		}
-		setEntries((current) => current.map((item) => item.id === entry.id
-			? { ...item, artworkTitle: title, artworkTitleHidden: isArtworkTitleHidden(title) }
-			: item));
 	}
 
 	function toggleArtworkTitle(entry: ShowcaseEntry, hidden: boolean) {
@@ -925,27 +1236,38 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 	const addPopoverStyle: CSSProperties = {
 		...popoverStyle, top: 'auto', bottom: '50px', left: '50%', right: 'auto', transform: 'translateX(-50%)',
 	};
-	const renderOverlay = (entry: ShowcaseEntry, index: number, host: HTMLElement) => createPortal(
-		<div style={{ position: 'relative', display: 'flex', justifyContent: 'flex-end', gap: '6px', padding: '3px', borderRadius: '4px', background: 'rgba(12,17,21,.72)', backdropFilter: 'blur(4px)' }}>
-			<div data-showcase-edit-region="true" style={{ position: 'relative' }}>
-				<button type="button" style={buttonStyle} title={`Edit ${entry.title}`} aria-label={`Edit ${entry.title}`} onClick={() => { setEditingId((id) => id === entry.id ? null : entry.id); setAddingOpen(false); }}><Pencil size={14} />Edit</button>
-				{editingId === entry.id && <div style={popoverStyle} onClick={(event) => event.stopPropagation()}>
-				<div style={{ marginBottom: '10px', color: '#e9eef0', fontSize: '14px', fontWeight: 700 }}>{entry.title}</div>
-				<div style={{ display: 'flex', gap: '6px', marginBottom: entry.kind === 'other' ? 0 : '13px' }}>
-					<button type="button" style={{ ...buttonStyle, flex: 1 }} disabled={index === 0} onClick={() => moveShowcase(index, -1)}><ArrowUp size={14} />Move up</button>
-					<button type="button" style={{ ...buttonStyle, flex: 1 }} disabled={index === entries.length - 1} onClick={() => moveShowcase(index, 1)}><ArrowDown size={14} />Move down</button>
-					<button type="button" style={{ ...buttonStyle, color: '#ffc0b5' }} onClick={() => removeShowcase(entry)}><Trash2 size={14} />Remove</button>
-				</div>
-				{(entry.kind === 'artwork' || entry.kind === 'featured-artwork') && <>
-				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Artwork title</span><input style={fieldStyle} aria-label={`Artwork title for ${entry.title}`} value={entry.artworkTitle.trim()} onChange={(event) => updateArtworkTitle(entry, event.target.value)} placeholder="Optional" /></label>
-				<label style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '11px', cursor: 'pointer' }}><input type="checkbox" checked={entry.artworkTitleHidden} onChange={(event) => toggleArtworkTitle(entry, event.target.checked)} />Hide item title</label>
-				</>}
-				{entry.kind !== 'other' && <label style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', minHeight: '34px', marginBottom: '9px', border: '1px solid #65727b', background: '#303c44', cursor: 'pointer' }}><ImagePlus size={14} />{entry.kind === 'workshop' ? 'Replace workshop image' : entry.kind === 'screenshot' ? 'Replace screenshot image' : 'Replace artwork'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(event) => void updateArtwork(entry, event)} /></label>}
-				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
-				</div>}
+	const previewPanelSize = (index: number) => editorPreview[index] || (activeEditor?.kind === 'workshop'
+		? { src: '', width: 126, height: 56 }
+		: index === 0 ? { src: '', width: 506, height: 284 } : { src: '', width: 100, height: 56 });
+	const previewSizes = Array.from({ length: editorPanelCount }, (_, index) => previewPanelSize(index));
+	const previewWidth = activeEditor?.kind === 'workshop' ? previewSizes.reduce((sum, panel) => sum + panel.width, 0) : activeEditor?.kind === 'featured-artwork' ? previewSizes[0].width : previewSizes[0].width + (previewSizes[1]?.width || 100);
+	const previewHeight = activeEditor?.kind === 'workshop'
+		? Math.max(...previewSizes.map((panel) => panel.height))
+		: editorPanelCount === 4
+			? Math.max(previewSizes[0].height, previewSizes.slice(1).reduce((sum, panel) => sum + panel.height, 0) + 8)
+			: Math.max(...previewSizes.map((panel) => panel.height));
+	const previewAspectRatio = previewWidth / Math.max(1, previewHeight);
+	const previewRenderWidth = Math.min(480, 390 * previewAspectRatio);
+	const previewStyle: CSSProperties = {
+		width: `min(100%, ${previewRenderWidth}px)`,
+		aspectRatio: `${previewWidth} / ${previewHeight}`,
+		gridTemplateColumns: activeEditor?.kind === 'workshop'
+			? previewSizes.map((panel) => `${panel.width}fr`).join(' ')
+			: activeEditor?.kind === 'featured-artwork' ? '1fr' : `${previewSizes[0].width}fr ${previewSizes[1]?.width || 100}fr`,
+	};
+	const renderPreviewPanel = (index: number, label: string, extraClass = '') => <div className={`showcase-editor-preview-panel ${extraClass}`} key={index} style={{ aspectRatio: `${previewPanelSize(index).width} / ${previewPanelSize(index).height}` }}>
+		<span>{label}</span>
+		{editorPreview[index]?.src ? <img src={editorPreview[index].src} alt={`Preview ${label.toLowerCase()}`} /> : <div className="showcase-editor-preview-empty">{editorLoading ? 'Preparing preview...' : 'Preview appears here'}</div>}
+	</div>;
+	const renderOverlay = (entry: ShowcaseEntry, host: HTMLElement) => {
+		return createPortal(
+		<div className="showcase-overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', outline: dragTargetShowcaseId === entry.id ? '3px solid #c9ef73' : hoveredShowcaseId === entry.id ? '2px solid rgba(201,239,115,.9)' : undefined, outlineOffset: '-2px', background: dragTargetShowcaseId === entry.id ? 'rgba(196,243,106,.1)' : hoveredShowcaseId === entry.id ? 'rgba(196,243,106,.035)' : undefined, transition: 'outline-color .12s ease, background .12s ease' }}>
+			<div className="showcase-overlay-actions" style={{ position: 'absolute', top: '5px', right: '5px', display: 'flex', alignItems: 'center', gap: '6px', padding: '3px', borderRadius: '4px', background: 'rgba(12,17,21,.78)', backdropFilter: 'blur(4px)', pointerEvents: 'auto' }}>
+				<button type="button" style={buttonStyle} title={`Edit ${entry.title}`} aria-label={`Edit ${entry.title}`} onClick={() => openEditor(entry)}><Pencil size={14} />Edit</button>
+				{(hasTwoPanelImageEditor(entry.kind) || entry.kind === 'workshop') && ((entry.exportFiles?.length === getExportPanelCount(entry)) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
 			</div>
-			{(hasTwoPanelImageEditor(entry.kind) || entry.kind === 'workshop') && ((entry.kind === 'workshop' && entry.exportFiles?.length === 5) || (hasTwoPanelImageEditor(entry.kind) && entry.exportFiles?.length === 2) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
 		</div>, host, entry?.id || 'showcase-add-controls');
+	};
 	const renderAddControl = (host: HTMLElement) => createPortal(
 		<div style={{ position: 'relative' }}>
 			<button type="button" className="showcase-add-trigger" style={floatingAddButtonStyle} title="Add showcase" aria-label="Add showcase" onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}><Plus size={18} color="#ffffff" />Add showcase</button>
@@ -959,7 +1281,66 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 
 	if (!previewDocument) return null;
 	return <>
-		{entries.map((entry, index) => renderOverlay(entry, index, entry.host))}
+		{entries.map((entry) => renderOverlay(entry, entry.host))}
 		{addControlHost && renderAddControl(addControlHost)}
+		<dialog
+			ref={editorDialogRef}
+			className="showcase-editor-dialog"
+			aria-labelledby="showcase-editor-title"
+			onClose={() => setEditingId(null)}
+			onCancel={(event) => { event.preventDefault(); setEditingId(null); }}
+			onClick={(event) => { if (event.target === event.currentTarget) setEditingId(null); }}
+		>
+			{activeEditor && <div className="showcase-editor-content">
+				<header className="showcase-editor-header">
+					<div><span className="source-label">SHOWCASE EDITOR</span><h2 id="showcase-editor-title">{activeEditor.title}</h2></div>
+					<button className="icon-button" type="button" aria-label="Close editor" title="Close editor" onClick={() => setEditingId(null)}><X size={17} /></button>
+				</header>
+				{activeEditor.kind !== 'other' && <>
+					<div className="showcase-editor-layout">
+						<div className="showcase-editor-preview" aria-busy={editorLoading}>
+							<div className="showcase-editor-preview-heading"><strong>Preview</strong><span>{activeEditor.kind === 'featured-artwork' ? 'Single image' : `${editorPanelCount} panels`}</span></div>
+							<div className={`showcase-editor-preview-panels ${activeEditor.kind === 'workshop' ? 'is-workshop' : activeEditor.kind === 'featured-artwork' ? 'is-featured' : editorPanelCount === 4 ? 'is-four-panel' : 'is-two-panel'}`} style={previewStyle}>
+								{activeEditor.kind === 'workshop'
+									? Array.from({ length: 5 }, (_, index) => renderPreviewPanel(index, `Panel ${index + 1}`))
+									: editorPanelCount === 4
+										? <>{renderPreviewPanel(0, 'Main')}<div className="showcase-editor-preview-side-stack">{[1, 2, 3].map((index) => renderPreviewPanel(index, `Side ${index}`, 'is-side'))}</div></>
+										: editorPanelCount === 2
+											? <>{renderPreviewPanel(0, 'Main')}{renderPreviewPanel(1, 'Side')}</>
+											: renderPreviewPanel(0, 'Featured image')}
+							</div>
+						</div>
+						<aside className="showcase-editor-controls">
+							{activeEditor.kind === 'artwork' && <div className="showcase-editor-control-group"><span className="showcase-editor-label">Artwork layout</span><div className="showcase-editor-layout-choice" role="group" aria-label="Artwork layout">
+								<button className={artworkLayout === 'main-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-side'} onClick={() => { setArtworkLayout('main-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-two"><i /><i /></span><span>Main + side</span></button>
+								<button className={artworkLayout === 'main-three-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-three-side'} onClick={() => { setArtworkLayout('main-three-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-four"><i /><i /><i /><i /></span><span>Main + 3 sides</span></button>
+							</div></div>}
+							{activeEditor.kind === 'artwork' && <label className="showcase-editor-checkbox"><input type="checkbox" checked={activeEditor.artworkTitleHidden} onChange={(event) => toggleArtworkTitle(activeEditor, event.target.checked)} /> Hide item title in preview</label>}
+							{(hasTwoPanelImageEditor(activeEditor.kind) || activeEditor.kind === 'workshop') && <div className="showcase-editor-control-group"><span className="showcase-editor-label">Images</span><div className="showcase-editor-modes" role="group" aria-label="Image upload mode">
+								<button className={`showcase-editor-mode ${imageInputMode === 'composite' ? 'is-active' : ''}`} type="button" aria-pressed={imageInputMode === 'composite'} onClick={() => { setImageInputMode('composite'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><strong>One full image</strong><span>We cut it to fit the showcase</span></button>
+								<button className={`showcase-editor-mode ${imageInputMode === 'separate' ? 'is-active' : ''}`} type="button" aria-pressed={imageInputMode === 'separate'} onClick={() => { setImageInputMode('separate'); setEditorFiles(Array.from({ length: editorPanelCount }, () => null)); setEditorPreview(Array.from({ length: editorPanelCount }, () => null)); setEditorError(''); }}><strong>Separate panels</strong><span>Upload each piece in display order</span></button>
+							</div></div>}
+							{imageInputMode === 'composite' || !hasTwoPanelImageEditor(activeEditor.kind) && activeEditor.kind !== 'workshop'
+								? <label className="showcase-editor-upload" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setCompositeFile(event.dataTransfer.files[0] || null); }}><ImagePlus size={19} /><span><strong>{editorFiles[0]?.name || 'Choose or drop your image here'}</strong><small>PNG, JPG, WEBP, GIF, APNG or AVIF</small></span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" onChange={selectCompositeImage} /></label>
+								: <div className="showcase-editor-panel-upload-area"><p>Choose each panel in the order shown in the preview.</p><div className="showcase-editor-panel-uploads">{Array.from({ length: editorPanelCount }, (_, index) => <label className={`showcase-editor-panel-upload ${editorFiles[index] ? 'has-file' : ''}`} key={index} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setPanelFile(index, event.dataTransfer.files[0] || null); }}><span>{activeEditor.kind === 'workshop' ? `Panel ${index + 1}` : index === 0 ? 'Main panel' : editorPanelCount === 4 ? `Side panel ${index}` : 'Side panel'}</span><span>{editorFiles[index]?.name || 'Choose or drop image'}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" onChange={(event) => selectPanelImage(index, event)} /></label>)}</div><small className="showcase-editor-upload-progress">{editorFiles.filter(Boolean).length} of {editorPanelCount} panels selected</small></div>}
+						</aside>
+					</div>
+				</>}
+				{editorError && <p className="showcase-editor-error" role="alert">{editorError}</p>}
+				<footer className="showcase-editor-footer">
+					<button className="showcase-editor-remove" type="button" onClick={() => { removeShowcase(activeEditor); setEditingId(null); }}><Trash2 size={15} /> Remove showcase</button>
+					<button className="showcase-editor-cancel" type="button" onClick={() => setEditingId(null)}>Cancel</button>
+					{activeEditor.kind !== 'other' && <button className="showcase-editor-apply" type="button" disabled={editorLoading || !!editorError || editorFiles.filter(Boolean).length !== (imageInputMode === 'separate' ? editorPanelCount : 1)} onClick={() => void applyEditorChanges()}>{editorLoading ? 'Preparing...' : 'Apply to preview'}</button>}
+				</footer>
+			</div>}
+		</dialog>
 	</>;
+}
+
+async function readPreviewPanel(file: File): Promise<PreviewPanel> {
+	const src = await readImageFile(file);
+	const image = new Image();
+	image.src = src;
+	await image.decode();
+	return { src, width: image.naturalWidth, height: image.naturalHeight };
 }
