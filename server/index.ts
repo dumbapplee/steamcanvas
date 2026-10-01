@@ -62,6 +62,7 @@ type PublicScreenshot = {
   imageUrl: string;
   thumbnailUrl: string;
   steamUrl: string;
+  searchText?: string;
   appid?: number;
   aspectRatio?: number;
 };
@@ -575,6 +576,7 @@ function extractPublicScreenshots(html: string, pageUrl: string): PublicScreensh
         imageUrl: imageUrl.href,
         thumbnailUrl: thumbnailUrl.href,
         steamUrl: new URL(item.attr('href') || `/sharedfiles/filedetails/?id=${id}`, pageUrl).href,
+        searchText: `Screenshot ${id} App ${item.attr('data-appid') || ''}`,
         ...(Number.isInteger(Number(item.attr('data-appid'))) ? { appid: Number(item.attr('data-appid')) } : {}),
         ...(Number.isFinite(aspectRatio) && aspectRatio > 0 ? { aspectRatio } : {}),
       });
@@ -670,12 +672,14 @@ app.post('/api/profile-screenshots', async (request, response) => {
   const cacheKey = `profile-screenshots:${screenshotsUrl.href}:page-${requestedPage}`;
   try {
     const catalog = await getCachedCatalog(cacheKey, async () => {
-      const pages = await Promise.all(Array.from({ length: pageBatchSize }, async (_, index) => {
+      const pages: PublicScreenshot[][] = [];
+      for (let index = 0; index < pageBatchSize; index += 1) {
         const pageUrl = new URL(screenshotsUrl.href);
         pageUrl.searchParams.set('p', String(requestedPage + index));
         const result = await getSteamHtmlWithRetry(pageUrl.href);
-        return extractPublicScreenshots(result.data, result.responseUrl);
-      }));
+        pages.push(extractPublicScreenshots(result.data, result.responseUrl));
+        if (index < pageBatchSize - 1) await new Promise((resolve) => setTimeout(resolve, 250));
+      }
       return {
         items: [...new Map(pages.flat().map((item) => [item.id, item])).values()],
         hasMore: pages[pages.length - 1]?.length > 0,
@@ -683,8 +687,9 @@ app.post('/api/profile-screenshots', async (request, response) => {
     });
     setCatalogCacheHeaders(response);
     response.json(catalog);
-  } catch {
-    response.status(502).json({ error: 'Steam could not load this public screenshot gallery right now.' });
+  } catch (error) {
+    const status = axios.isAxiosError(error) && error.response?.status === 429 ? 429 : axios.isAxiosError(error) && error.code === 'ECONNABORTED' ? 504 : 502;
+    response.status(status).json({ error: status === 429 ? 'Steam is rate limiting screenshot requests. Wait a moment and try again.' : status === 504 ? 'Steam took too long to load the screenshot gallery.' : 'Steam could not load this public screenshot gallery right now.' });
   }
 });
 
@@ -700,8 +705,9 @@ app.post('/api/screenshot-image', async (request, response) => {
     });
     if (!imageUrl) throw new Error('Steam did not expose a full-resolution screenshot.');
     response.json({ imageUrl });
-  } catch {
-    response.status(502).json({ error: 'Steam could not load the full-resolution screenshot right now.' });
+  } catch (error) {
+    const status = axios.isAxiosError(error) && error.response?.status === 429 ? 429 : axios.isAxiosError(error) && error.code === 'ECONNABORTED' ? 504 : 502;
+    response.status(status).json({ error: status === 429 ? 'Steam is rate limiting full-resolution requests. Wait a moment and try again.' : status === 504 ? 'Steam took too long to load the full-resolution screenshot.' : 'Steam could not load the full-resolution screenshot right now.' });
   }
 });
 

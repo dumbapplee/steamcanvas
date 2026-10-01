@@ -18,7 +18,7 @@ type ShowcaseEntry = {
 	host: HTMLElement;
 };
 
-type PublicScreenshot = { id: string; imageUrl: string; thumbnailUrl: string; fullImageUrl?: string; steamUrl: string; appid?: number; aspectRatio?: number };
+type PublicScreenshot = { id: string; imageUrl: string; thumbnailUrl: string; fullImageUrl?: string; steamUrl: string; searchText?: string; appid?: number; aspectRatio?: number };
 type EditorSource = File | PublicScreenshot;
 
 type ShowcaseEditorProps = {
@@ -583,6 +583,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 	const [editorFiles, setEditorFiles] = useState<Array<EditorSource | null>>([]);
 	const [editorPreview, setEditorPreview] = useState<Array<PreviewPanel | null>>([]);
 	const [editorLoading, setEditorLoading] = useState(false);
+	const [editorProgress, setEditorProgress] = useState('');
 	const [editorError, setEditorError] = useState('');
 	const [publicScreenshots, setPublicScreenshots] = useState<PublicScreenshot[]>([]);
 	const [publicScreenshotSearch, setPublicScreenshotSearch] = useState('');
@@ -935,20 +936,22 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 	const editorPanelCount = activeEditor ? getMosaicPanelCount(activeEditor.kind, artworkLayout) : 1;
 
 	function openEditor(entry: ShowcaseEntry) {
-		const savedLayout = entry.element.dataset.steamcanvasMosaicPanels === '4' ? 'main-three-side' : 'main-side';
+		const publicSelectionIds = entry.element.dataset.steamcanvasPublicScreenshotIds ? JSON.parse(entry.element.dataset.steamcanvasPublicScreenshotIds) as string[] : [];
+		const savedLayout = publicSelectionIds.length || entry.element.dataset.steamcanvasMosaicPanels === '4' ? 'main-three-side' : 'main-side';
 		setArtworkLayout(savedLayout);
 		const panelCount = getMosaicPanelCount(entry.kind, savedLayout);
 		const currentImages = [...entry.element.querySelectorAll<HTMLImageElement>(entry.kind === 'workshop'
 			? '.myworkshop_showcase .workshop_showcase_item_image'
 			: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot.showcase_slot img')];
-		setImageInputMode('composite');
+		setImageInputMode(publicSelectionIds.length ? 'public' : 'composite');
 		setEditorFiles([]);
-		setEditorPreview(currentImages.slice(0, panelCount).map((image) => ({
+		setEditorPreview(publicSelectionIds.length ? [] : currentImages.slice(0, panelCount).map((image) => ({
 			src: image.currentSrc || image.src,
 			width: image.naturalWidth || image.width || 16,
 			height: image.naturalHeight || image.height || 9,
 		})));
 		setEditorLoading(false);
+		setEditorProgress('');
 		setEditorError('');
 		setAddingOpen(false);
 		setEditingId(entry.id);
@@ -957,10 +960,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 		setPublicScreenshotExpanded(false);
 		setPublicScreenshotNextPage(1);
 		setPublicScreenshotHasMore(true);
-		if (entry.kind === 'screenshot' && profileUrl) void loadPublicScreenshots(1, false);
+		if (entry.kind === 'screenshot' && profileUrl) void loadPublicScreenshots(1, false, entry.id);
 	}
 
-	async function loadPublicScreenshots(page: number, append: boolean) {
+	async function loadPublicScreenshots(page: number, append: boolean, restoreEntryId?: string) {
 		setPublicScreenshotsLoading(true);
 		setEditorError('');
 		try {
@@ -969,7 +972,17 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 			});
 			const result = await response.json() as { items?: PublicScreenshot[]; hasMore?: boolean; error?: string };
 			if (!response.ok) throw new Error(result.error || 'Could not load public screenshots.');
-			setPublicScreenshots((current) => append ? [...new Map([...current, ...(result.items || [])].map((item) => [item.id, item])).values()] : result.items || []);
+			const nextItems = append ? [...new Map([...publicScreenshots, ...(result.items || [])].map((item) => [item.id, item])).values()] : result.items || [];
+			setPublicScreenshots(nextItems);
+			if (!append && restoreEntryId) {
+				const entry = entries.find((item) => item.id === restoreEntryId);
+				const ids = entry?.element.dataset.steamcanvasPublicScreenshotIds ? JSON.parse(entry.element.dataset.steamcanvasPublicScreenshotIds) as string[] : [];
+				const restored = ids.map((id) => nextItems.find((item) => item.id === id)).filter((item): item is PublicScreenshot => !!item);
+				if (entry && restored.length) {
+					setEditorFiles(restored);
+					void updateEditorPreview(entry, restored, 'public');
+				}
+			}
 			setPublicScreenshotNextPage(page + 6);
 			setPublicScreenshotHasMore(result.hasMore === true);
 		} catch (caught) {
@@ -1056,9 +1069,13 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 		const expectedFiles = imageInputMode === 'separate' || imageInputMode === 'public' ? editorPanelCount : 1;
 		if (files.length !== expectedFiles || editorLoading || editorError) return;
 		setEditorLoading(true);
-		const applied = await updateArtwork(activeEditor, files);
-		setEditorLoading(false);
-		if (applied) setEditingId(null);
+		try {
+			const applied = await updateArtwork(activeEditor, files);
+			if (applied) setEditingId(null);
+		} finally {
+			setEditorLoading(false);
+			setEditorProgress('');
+		}
 	}
 
 	async function updateArtwork(entry: ShowcaseEntry, files: EditorSource[]): Promise<boolean> {
@@ -1090,7 +1107,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 			const fullResolutionImages = files.every(isPublicScreenshot)
 				? await (async () => {
 					const images: string[] = [];
-					for (const file of files) {
+					for (const [index, file] of files.entries()) {
+						setEditorProgress(`Loading screenshot ${index + 1} of ${files.length}...`);
 						if (file.fullImageUrl) {
 							images.push(file.fullImageUrl);
 							continue;
@@ -1102,6 +1120,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 						if (!response.ok || !result.imageUrl) throw new Error(result.error || 'Could not load the full-resolution screenshot.');
 						images.push(result.imageUrl);
 					}
+					setEditorProgress('Applying screenshots...');
 					return images;
 				})()
 				: undefined;
@@ -1169,6 +1188,12 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 				sideSlots.slice(panelCount - 1).forEach((slot) => slot.remove());
 				entry.element.dataset.steamcanvasMosaic = 'true';
 				entry.element.dataset.steamcanvasMosaicPanels = String(panelCount);
+				entry.element.dataset.steamcanvasPublicScreenshots = files.every(isPublicScreenshot) ? 'true' : 'false';
+				if (files.every(isPublicScreenshot)) {
+					entry.element.dataset.steamcanvasPublicScreenshotIds = JSON.stringify(files.map((file) => file.id));
+				} else {
+					delete entry.element.dataset.steamcanvasPublicScreenshotIds;
+				}
 				const baseName = sourceName(files[0]).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || (entry.kind === 'screenshot' ? 'steam-screenshot' : 'steam-artwork');
 				if (mosaic.animated?.format === 'gif') {
 					try {
@@ -1326,7 +1351,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 	const previewAspectRatio = previewWidth / Math.max(1, previewHeight);
 	const previewRenderWidth = Math.min(480, 390 * previewAspectRatio);
 	const isAnimatedPreview = imageInputMode === 'composite' && !!editorFiles[0] && !isPublicScreenshot(editorFiles[0]) && /\.(gif|apng)$/i.test(editorFiles[0].name);
-	const publicScreenshotMatches = publicScreenshots.filter((screenshot) => !publicScreenshotSearch.trim() || `${screenshot.id} ${screenshot.steamUrl}`.toLowerCase().includes(publicScreenshotSearch.trim().toLowerCase()));
+	const publicScreenshotMatches = publicScreenshots.filter((screenshot) => !publicScreenshotSearch.trim() || `${screenshot.searchText || ''} ${screenshot.id} ${screenshot.steamUrl}`.toLowerCase().includes(publicScreenshotSearch.trim().toLowerCase()));
 	const publicScreenshotPageSize = publicScreenshotExpanded ? 9 : 6;
 	const publicScreenshotPageCount = Math.max(1, Math.ceil(publicScreenshotMatches.length / publicScreenshotPageSize));
 	const visiblePublicScreenshots = publicScreenshotMatches.slice(publicScreenshotPage * publicScreenshotPageSize, (publicScreenshotPage + 1) * publicScreenshotPageSize);
@@ -1347,7 +1372,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 			<div className="showcase-overlay-actions" style={{ position: 'absolute', top: '5px', right: '5px', display: 'flex', alignItems: 'center', gap: '6px', padding: '3px', borderRadius: '4px', background: 'rgba(12,17,21,.78)', backdropFilter: 'blur(4px)', pointerEvents: 'auto' }}>
 				<button type="button" style={buttonStyle} title={`Edit ${entry.title}`} aria-label={`Edit ${entry.title}`} onClick={() => openEditor(entry)}><Pencil size={14} />Edit</button>
 				<button type="button" style={{ ...buttonStyle, width: '30px', padding: 0, justifyContent: 'center', color: '#ffc0b5' }} title={`Remove ${entry.title}`} aria-label={`Remove ${entry.title}`} onClick={() => { removeShowcase(entry); if (editingId === entry.id) setEditingId(null); }}><Trash2 size={14} /></button>
-				{(hasTwoPanelImageEditor(entry.kind) || entry.kind === 'workshop') && ((entry.exportFiles?.length === getExportPanelCount(entry)) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
+				{(hasTwoPanelImageEditor(entry.kind) || entry.kind === 'workshop') && entry.element.dataset.steamcanvasPublicScreenshots !== 'true' && ((entry.exportFiles?.length === getExportPanelCount(entry)) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
 			</div>
 		</div>, host, entry?.id || 'showcase-add-controls');
 	};
@@ -1371,13 +1396,13 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 			className="showcase-editor-dialog"
 			aria-labelledby="showcase-editor-title"
 			onClose={() => setEditingId(null)}
-			onCancel={(event) => { event.preventDefault(); setEditingId(null); }}
-			onClick={(event) => { if (event.target === event.currentTarget) setEditingId(null); }}
+			onCancel={(event) => { event.preventDefault(); if (!editorLoading) setEditingId(null); }}
+			onClick={(event) => { if (event.target === event.currentTarget && !editorLoading) setEditingId(null); }}
 		>
 			{activeEditor && <div className="showcase-editor-content">
 				<header className="showcase-editor-header">
 					<div><span className="source-label">SHOWCASE EDITOR</span><h2 id="showcase-editor-title">{activeEditor.title}</h2></div>
-					<button className="icon-button" type="button" aria-label="Close editor" title="Close editor" onClick={() => setEditingId(null)}><X size={17} /></button>
+					<button className="icon-button" type="button" aria-label="Close editor" title={editorLoading ? 'Please wait until the operation finishes' : 'Close editor'} disabled={editorLoading} onClick={() => setEditingId(null)}><X size={17} /></button>
 				</header>
 				{activeEditor.kind !== 'other' && <>
 					<div className="showcase-editor-layout">
@@ -1415,6 +1440,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 									})}
 									</div>
 									{publicScreenshotExpanded && <div className="showcase-public-pagination"><button type="button" aria-label="Previous screenshot page" title="Previous page" disabled={publicScreenshotPage === 0} onClick={() => setPublicScreenshotPage((page) => Math.max(0, page - 1))}><ChevronLeft size={14} /></button><span>{publicScreenshotPage + 1} / {publicScreenshotPageCount}</span><button type="button" aria-label="Next screenshot page" title="Next page" disabled={publicScreenshotPage >= publicScreenshotPageCount - 1} onClick={() => setPublicScreenshotPage((page) => Math.min(publicScreenshotPageCount - 1, page + 1))}><ChevronRight size={14} /></button></div>}
+									{publicScreenshotExpanded && <div className="showcase-public-count">{publicScreenshotMatches.length} screenshots loaded{publicScreenshotHasMore ? ' · more available' : ''}</div>}
 									{publicScreenshotExpanded && publicScreenshotHasMore && <button className="showcase-public-load-more" type="button" disabled={publicScreenshotsLoading} onClick={() => void loadPublicScreenshots(publicScreenshotNextPage, true)}>{publicScreenshotsLoading ? 'Loading more...' : 'Load more screenshots'}</button>}
 								</> : <div className="showcase-public-picker-status">No public screenshots were found on this profile.</div>}
 							</div>}
@@ -1430,10 +1456,11 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 						</aside>
 					</div>
 				</>}
+				{editorProgress && <p className="showcase-editor-progress" role="status" aria-live="polite">{editorProgress}</p>}
 				{editorError && <p className="showcase-editor-error" role="alert">{editorError}</p>}
 				<footer className="showcase-editor-footer">
 					<button className="showcase-editor-remove" type="button" onClick={() => { removeShowcase(activeEditor); setEditingId(null); }}><Trash2 size={15} /> Remove showcase</button>
-					<button className="showcase-editor-cancel" type="button" onClick={() => setEditingId(null)}>Cancel</button>
+					<button className="showcase-editor-cancel" type="button" disabled={editorLoading} onClick={() => setEditingId(null)}>Cancel</button>
 					{activeEditor.kind !== 'other' && <button className="showcase-editor-apply" type="button" disabled={editorLoading || !!editorError || editorFiles.filter(Boolean).length !== (imageInputMode === 'separate' || imageInputMode === 'public' ? editorPanelCount : 1)} onClick={() => void applyEditorChanges()}>{editorLoading ? 'Preparing...' : 'Apply to preview'}</button>}
 				</footer>
 			</div>}
