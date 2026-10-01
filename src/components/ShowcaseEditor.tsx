@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { Camera, ChevronLeft, ChevronRight, Hammer, ImagePlus, Pencil, Plus, RotateCcw, Search, Star, Trash2, X } from 'lucide-react';
+import { Camera, ChevronLeft, ChevronRight, Hammer, ImagePlus, LoaderCircle, Pencil, Plus, RotateCcw, Search, Star, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
@@ -1614,7 +1614,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							{activeEditor.kind === 'screenshot' && <div className={`showcase-public-picker ${publicScreenshotExpanded ? 'is-expanded' : ''}`}>
 								<div className="showcase-editor-label">PUBLIC SCREENSHOTS</div>
 								<p className="showcase-public-picker-copy">Choose up to {editorPanelCount} screenshots from this profile. They stay whole in the showcase slots.</p>
-								{publicScreenshotsLoading && !publicScreenshots.length ? <div className="showcase-public-picker-status">Loading public screenshots...</div> : publicScreenshots.length ? <>
+								{publicScreenshotsLoading && !publicScreenshots.length ? <div className="showcase-public-picker-status" role="status" aria-live="polite"><LoaderCircle size={14} className="spin" aria-hidden="true" />Loading public screenshots...</div> : publicScreenshots.length ? <>
 									<div className="showcase-public-toolbar">
 										{publicScreenshotExpanded && <input autoFocus className="showcase-public-search" type="search" value={publicScreenshotSearch} onChange={(event) => { setPublicScreenshotSearch(event.target.value); setPublicScreenshotPage(0); }} placeholder="Search screenshots" aria-label="Search public screenshots" />}
 										<button className="showcase-public-expand" type="button" aria-label={publicScreenshotExpanded ? 'Close screenshot browser' : 'Open screenshot browser'} title={publicScreenshotExpanded ? 'Close screenshot browser' : 'Browse and search screenshots'} onClick={() => { setPublicScreenshotExpanded((expanded) => !expanded); setPublicScreenshotPage(0); }}><Search size={15} /></button>
@@ -1629,7 +1629,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 									</div>
 									{publicScreenshotExpanded && <div className="showcase-public-pagination"><button type="button" aria-label="Previous screenshot page" title="Previous page" disabled={publicScreenshotPage === 0} onClick={() => setPublicScreenshotPage((page) => Math.max(0, page - 1))}><ChevronLeft size={14} /></button><span>{publicScreenshotPage + 1} / {publicScreenshotPageCount}</span><button type="button" aria-label="Next screenshot page" title="Next page" disabled={publicScreenshotPage >= publicScreenshotPageCount - 1} onClick={() => setPublicScreenshotPage((page) => Math.min(publicScreenshotPageCount - 1, page + 1))}><ChevronRight size={14} /></button></div>}
 									{publicScreenshotExpanded && <div className="showcase-public-count">{publicScreenshotMatches.length} screenshots loaded{publicScreenshotHasMore ? ' · more available' : ''}</div>}
-									{publicScreenshotExpanded && publicScreenshotHasMore && <button className="showcase-public-load-more" type="button" disabled={publicScreenshotsLoading} onClick={() => void loadPublicScreenshots(publicScreenshotNextPage, true)}>{publicScreenshotsLoading ? 'Loading more...' : 'Load more screenshots'}</button>}
+									{publicScreenshotExpanded && publicScreenshotHasMore && <button className="showcase-public-load-more" type="button" disabled={publicScreenshotsLoading} onClick={() => void loadPublicScreenshots(publicScreenshotNextPage, true)}>{publicScreenshotsLoading && <LoaderCircle size={13} className="spin" aria-hidden="true" />}{publicScreenshotsLoading ? 'Loading more...' : 'Load more screenshots'}</button>}
 								</> : <div className="showcase-public-picker-status">No public screenshots were found on this profile.</div>}
 							</div>}
 							<label className={`showcase-editor-upload ${editorPanelCount > 1 ? 'is-multiple' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setShowcaseFiles([...event.dataTransfer.files]); }}>

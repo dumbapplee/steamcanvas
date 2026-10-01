@@ -1,5 +1,7 @@
 # SteamCanvas
 
+Author: [dumbapplee](https://github.com/dumbapplee)
+
 Steam profile preview from public profile HTML. Enter a SteamID64, a custom profile name, or a full Steam Community profile URL. SteamCanvas only previews public profile pages; it does not modify Steam accounts.
 
 ## Development

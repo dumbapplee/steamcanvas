@@ -1,5 +1,9 @@
 {
   "name": "steamcanvas",
+  "author": {
+    "name": "dumbapplee",
+    "url": "https://github.com/dumbapplee"
+  },
   "private": true,
   "version": "0.1.0",
   "type": "module",

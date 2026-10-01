@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowUpRight, Check, CircleHelp, Download, ExternalLink, Github, LoaderCircle, PanelsTopLeft, RotateCcw, Search, ShieldCheck } from 'lucide-react';
+import { ArrowUpRight, Check, CircleHelp, Coffee, Download, ExternalLink, Github, LoaderCircle, PanelsTopLeft, RotateCcw, Search, ShieldCheck } from 'lucide-react';
 import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './components/AvatarEditor';
 import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFramePicker';
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
@@ -466,13 +466,16 @@ export default function App() {
   return (
     <main className={`app-shell${profile ? ' has-profile' : ''}`}>
       <header className="topbar">
-        <a className="brand" href="/" aria-label="SteamCanvas home">
-          <span className="brand-mark"><PanelsTopLeft size={18} strokeWidth={2.1} /></span>
-          <span>steam<span className="brand-light">canvas</span></span>
-        </a>
+        <div className="brand">
+          <a className="brand-home" href="/" aria-label="SteamCanvas home">
+            <span className="brand-mark"><PanelsTopLeft size={18} strokeWidth={2.1} /></span>
+            <span>steam<span className="brand-light">canvas</span></span>
+          </a>
+          <a className="author-credit" href="https://github.com/dumbapplee" target="_blank" rel="noreferrer">by dumbapplee</a>
+        </div>
         <nav className="topbar-actions" aria-label="Project links">
           <a className="topbar-link" href="https://github.com/dumbapplee/steamcanvas" target="_blank" rel="noreferrer"><Github size={15} /> GitHub <ExternalLink size={12} /></a>
-          <span className="topbar-link support-placeholder" aria-disabled="true" title="Support link coming soon">Support me</span>
+          <a className="topbar-link" href="https://buymeacoffee.com/migueelss" target="_blank" rel="noreferrer"><Coffee size={15} /> Support me <ExternalLink size={12} /></a>
         </nav>
       </header>
 
