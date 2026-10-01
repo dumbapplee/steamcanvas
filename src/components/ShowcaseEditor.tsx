@@ -936,7 +936,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 	const editorPanelCount = activeEditor ? getMosaicPanelCount(activeEditor.kind, artworkLayout) : 1;
 
 	function openEditor(entry: ShowcaseEntry) {
-		const publicSelectionIds = entry.element.dataset.steamcanvasPublicScreenshotIds ? JSON.parse(entry.element.dataset.steamcanvasPublicScreenshotIds) as string[] : [];
+		const publicSelection = entry.element.dataset.steamcanvasPublicScreenshotData ? JSON.parse(entry.element.dataset.steamcanvasPublicScreenshotData) as PublicScreenshot[] : [];
+		const publicSelectionIds = publicSelection.map((item) => item.id);
 		const savedLayout = publicSelectionIds.length || entry.element.dataset.steamcanvasMosaicPanels === '4' ? 'main-three-side' : 'main-side';
 		setArtworkLayout(savedLayout);
 		const panelCount = getMosaicPanelCount(entry.kind, savedLayout);
@@ -944,7 +945,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 			? '.myworkshop_showcase .workshop_showcase_item_image'
 			: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot.showcase_slot img')];
 		setImageInputMode(publicSelectionIds.length ? 'public' : 'composite');
-		setEditorFiles([]);
+		setEditorFiles(publicSelection);
 		setEditorPreview(publicSelectionIds.length ? [] : currentImages.slice(0, panelCount).map((image) => ({
 			src: image.currentSrc || image.src,
 			width: image.naturalWidth || image.width || 16,
@@ -960,6 +961,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 		setPublicScreenshotExpanded(false);
 		setPublicScreenshotNextPage(1);
 		setPublicScreenshotHasMore(true);
+		if (publicSelection.length) void updateEditorPreview(entry, publicSelection, 'public');
 		if (entry.kind === 'screenshot' && profileUrl) void loadPublicScreenshots(1, false, entry.id);
 	}
 
@@ -1191,8 +1193,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 				entry.element.dataset.steamcanvasPublicScreenshots = files.every(isPublicScreenshot) ? 'true' : 'false';
 				if (files.every(isPublicScreenshot)) {
 					entry.element.dataset.steamcanvasPublicScreenshotIds = JSON.stringify(files.map((file) => file.id));
+					entry.element.dataset.steamcanvasPublicScreenshotData = JSON.stringify(files.map(({ id, imageUrl, thumbnailUrl, steamUrl, searchText, appid, aspectRatio }) => ({ id, imageUrl, thumbnailUrl, steamUrl, searchText, appid, aspectRatio })));
 				} else {
 					delete entry.element.dataset.steamcanvasPublicScreenshotIds;
+					delete entry.element.dataset.steamcanvasPublicScreenshotData;
 				}
 				const baseName = sourceName(files[0]).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || (entry.kind === 'screenshot' ? 'steam-screenshot' : 'steam-artwork');
 				if (mosaic.animated?.format === 'gif') {
