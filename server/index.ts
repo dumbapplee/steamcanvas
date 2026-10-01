@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { load } from 'cheerio';
 import express from 'express';
+import { resolve } from 'node:path';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -722,6 +723,12 @@ app.post('/api/screenshot-image', async (request, response) => {
   }
 });
 
+const clientBuildPath = resolve('dist');
+app.use(express.static(clientBuildPath));
+app.get(/^(?!\/api(?:\/|$)).*/, (_request, response) => {
+  response.sendFile(resolve(clientBuildPath, 'index.html'));
+});
+
 app.listen(port, '0.0.0.0', () => {
-  console.log(`SteamCanvas API listening on http://localhost:${port}`);
+  console.log(`SteamCanvas listening on http://localhost:${port}`);
 });
