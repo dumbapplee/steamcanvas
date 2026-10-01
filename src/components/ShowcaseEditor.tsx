@@ -5,7 +5,7 @@ import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 
-type ShowcaseKind = 'artwork' | 'featured-artwork' | 'other';
+type ShowcaseKind = 'artwork' | 'featured-artwork' | 'workshop' | 'other';
 
 type ShowcaseEntry = {
 	id: string;
@@ -25,7 +25,7 @@ type ShowcaseEditorProps = {
 
 type ArtworkMosaic = {
 	images: string[];
-	animated?: { width: number; height: number; mainWidth: number; format: 'gif' | 'apng' };
+	animated?: { width: number; height: number; mainWidth: number; panelWidths?: number[]; format: 'gif' | 'apng' };
 };
 
 function getShowcaseArea(document: Document | null, create = false): HTMLElement | null {
@@ -41,6 +41,7 @@ function getShowcaseArea(document: Document | null, create = false): HTMLElement
 }
 
 function classifyShowcase(element: HTMLElement): ShowcaseKind {
+	if (element.querySelector('.myworkshop_showcase')) return 'workshop';
 	if (!element.classList.contains('myart')) return 'other';
 	return element.querySelector('.screenshot_showcase_primary.single') ? 'featured-artwork' : 'artwork';
 }
@@ -181,6 +182,49 @@ async function splitArtworkMosaic(file: File): Promise<ArtworkMosaic> {
 	};
 }
 
+async function splitWorkshopMosaic(file: File): Promise<ArtworkMosaic> {
+	const dataUrl = await new Promise<string>((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Could not read workshop image.'));
+		reader.onerror = () => reject(new Error('Could not read workshop image.'));
+		reader.readAsDataURL(file);
+	});
+	const image = new Image();
+	image.src = dataUrl;
+	await image.decode();
+
+	const panelCount = 5;
+	const width = 630;
+	const height = Math.max(1, Math.round(image.naturalHeight * width / image.naturalWidth));
+	const panelWidths = Array.from({ length: panelCount }, (_, index) => Math.floor((index + 1) * width / panelCount) - Math.floor(index * width / panelCount));
+	const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
+	const isApng = file.type === 'image/apng' || /\.apng$/i.test(file.name);
+	if (isGif || isApng) {
+		return { images: Array(panelCount).fill(dataUrl), animated: { width, height, mainWidth: panelWidths[0], panelWidths, format: isGif ? 'gif' : 'apng' } };
+	}
+
+	const canvas = document.createElement('canvas');
+	canvas.width = width;
+	canvas.height = height;
+	const context = canvas.getContext('2d');
+	if (!context) throw new Error('Could not prepare workshop image panels.');
+	context.drawImage(image, 0, 0, width, height);
+
+	const panels: string[] = [];
+	let sourceX = 0;
+	for (const panelWidth of panelWidths) {
+		const panel = document.createElement('canvas');
+		panel.width = panelWidth;
+		panel.height = height;
+		const panelContext = panel.getContext('2d');
+		if (!panelContext) throw new Error('Could not prepare a workshop image panel.');
+		panelContext.drawImage(canvas, sourceX, 0, panelWidth, height, 0, 0, panelWidth, height);
+		panels.push(panel.toDataURL('image/png'));
+		sourceX += panelWidth;
+	}
+	return { images: panels };
+}
+
 function readBlobDataUrl(blob: Blob): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -207,7 +251,7 @@ async function encodeAnimatedMosaic(file: File, mosaic: NonNullable<ArtworkMosai
 	const patchContext = patchCanvas.getContext('2d');
 	if (!patchContext) throw new Error('Could not prepare animated artwork patches.');
 
-	const panelWidths = [mosaic.mainWidth, mosaic.width - mosaic.mainWidth];
+	const panelWidths = mosaic.panelWidths || [mosaic.mainWidth, mosaic.width - mosaic.mainWidth];
 	const encoders = panelWidths.map(() => GIFEncoder({ initialCapacity: Math.max(4096, mosaic.width * mosaic.height) }));
 	const panelCanvases = panelWidths.map((width) => {
 		const canvas = document.createElement('canvas');
@@ -318,7 +362,7 @@ async function encodeAnimatedMosaic(file: File, mosaic: NonNullable<ArtworkMosai
 		for (let panelIndex = 0; panelIndex < panelCanvases.length; panelIndex += 1) {
 			const panelContext = panelContexts[panelIndex];
 			if (!panelContext) continue;
-			const sourceX = panelIndex === 0 ? 0 : mosaic.mainWidth;
+			const sourceX = panelWidths.slice(0, panelIndex).reduce((total, width) => total + width, 0);
 			panelContext.clearRect(0, 0, panelCanvases[panelIndex].width, mosaic.height);
 			panelContext.drawImage(mainCanvas, sourceX, 0, panelCanvases[panelIndex].width, mosaic.height, 0, 0, panelCanvases[panelIndex].width, mosaic.height);
 			const pixels = panelContext.getImageData(0, 0, panelCanvases[panelIndex].width, mosaic.height).data;
@@ -535,12 +579,16 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			setError('Choose PNG, JPG, WEBP, GIF, APNG, or AVIF artwork.');
 			return;
 		}
-		const images = [...entry.element.querySelectorAll<HTMLImageElement>('.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot img')];
+		const images = [...entry.element.querySelectorAll<HTMLImageElement>(entry.kind === 'workshop'
+			? '.myworkshop_showcase .workshop_showcase_item_image'
+			: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot img')];
 		try {
 			let exportWarning = false;
 			const mosaic = entry.kind === 'artwork'
 				? await splitArtworkMosaic(files[0])
-				: { images: [await new Promise<string>((resolve, reject) => {
+				: entry.kind === 'workshop'
+					? await splitWorkshopMosaic(files[0])
+					: { images: [await new Promise<string>((resolve, reject) => {
 					const reader = new FileReader();
 					reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Could not read artwork image.'));
 					reader.onerror = () => reject(new Error('Could not read artwork image.'));
@@ -555,16 +603,35 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				image.closest<HTMLElement>('[data-steamcanvas-empty-slot]')?.removeAttribute('data-steamcanvas-empty-slot');
 				const anchor = image.closest<HTMLAnchorElement>('a');
 				anchor?.setAttribute('href', dataUrl);
+				if (entry.kind === 'workshop') {
+					image.style.display = 'block';
+					image.style.width = '100%';
+					image.style.maxWidth = '100%';
+					image.style.minHeight = '0';
+					image.style.objectFit = 'fill';
+					image.style.transformOrigin = 'top left';
+					if (anchor) {
+						anchor.style.display = 'block';
+						anchor.style.width = '100%';
+						anchor.style.overflow = 'hidden';
+					}
+					if (!mosaic.animated) {
+						image.style.height = 'auto';
+						image.style.transform = 'none';
+					}
+				}
 				if (mosaic.animated && anchor) {
 					anchor.style.display = 'block';
 					anchor.style.overflow = 'hidden';
 					anchor.style.height = `${mosaic.animated.height}px`;
-					anchor.style.width = index === 0 ? '100%' : '100px';
-					image.style.width = `${mosaic.animated.width}px`;
+					anchor.style.width = entry.kind === 'workshop' ? '100%' : index === 0 ? '100%' : '100px';
+					image.style.width = `${entry.kind === 'workshop' ? mosaic.animated.width : mosaic.animated.width}px`;
 					image.style.maxWidth = 'none';
 					image.style.minHeight = '0';
 					image.style.objectFit = 'fill';
-					image.style.transform = index === 0 ? 'none' : `translateX(-${mosaic.animated.mainWidth}px)`;
+					const panelWidths = mosaic.animated.panelWidths || [mosaic.animated.mainWidth, mosaic.animated.width - mosaic.animated.mainWidth];
+					const panelOffset = panelWidths.slice(0, index).reduce((total, width) => total + width, 0);
+					image.style.transform = panelOffset ? `translateX(-${panelOffset}px)` : 'none';
 					image.style.transformOrigin = 'top left';
 				}
 			}
@@ -611,6 +678,40 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 					}));
 				}
 			}
+			if (entry.kind === 'workshop') {
+				const baseName = files[0].name.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || 'steam-workshop';
+				if (mosaic.animated?.format === 'gif') {
+					try {
+						const gifPanels = await encodeAnimatedMosaic(files[0], mosaic.animated);
+						setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
+							...item,
+							exportFiles: gifPanels.map((url, index) => ({ name: `${baseName}-${index + 1}.gif`, url })),
+							animatedArtwork: undefined,
+						}));
+					} catch (caught) {
+						const reason = caught instanceof Error ? caught.message : 'GIF export could not be completed.';
+						setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
+							...item,
+							exportFiles: undefined,
+							animatedArtwork: { name: files[0].name, url: mosaic.images[0] },
+						}));
+						exportWarning = true;
+						setError(`${reason} The original animated file is available to download.`);
+					}
+				} else if (mosaic.animated) {
+					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
+						...item,
+						exportFiles: undefined,
+						animatedArtwork: { name: files[0].name, url: mosaic.images[0] },
+					}));
+				} else {
+					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
+						...item,
+						exportFiles: mosaic.images.map((url, index) => ({ name: `${baseName}-${index + 1}.png`, url })),
+						animatedArtwork: undefined,
+					}));
+				}
+			}
 			if (!exportWarning) setError('');
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : 'Could not load artwork images.');
@@ -618,7 +719,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 	}
 
 	async function downloadArtwork(entry: ShowcaseEntry) {
-		if (entry.exportFiles?.length === 2) {
+		if (entry.exportFiles?.length === (entry.kind === 'workshop' ? 5 : 2)) {
 			try {
 				const archive = new JSZip();
 				for (const file of entry.exportFiles) {
@@ -628,7 +729,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				}
 				const blob = await archive.generateAsync({ type: 'blob' });
 				const url = URL.createObjectURL(blob);
-				const baseName = entry.exportFiles[0].name.replace(/-main\.(?:png|gif)$/i, '') || 'steam-artwork';
+				const baseName = entry.exportFiles[0].name.replace(/-(?:main|side|[1-5])\.(?:png|gif)$/i, '') || 'steam-artwork';
 				const link = globalThis.document.createElement('a');
 				link.href = url;
 				link.download = `${baseName}.zip`;
@@ -706,15 +807,15 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 					<button type="button" style={{ ...buttonStyle, flex: 1 }} disabled={index === entries.length - 1} onClick={() => moveShowcase(index, 1)}><ArrowDown size={14} />Move down</button>
 					<button type="button" style={{ ...buttonStyle, color: '#ffc0b5' }} onClick={() => removeShowcase(entry)}><Trash2 size={14} />Remove</button>
 				</div>
-				{entry.kind !== 'other' && <>
+				{(entry.kind === 'artwork' || entry.kind === 'featured-artwork') && <>
 				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Artwork title</span><input style={fieldStyle} aria-label={`Artwork title for ${entry.title}`} value={entry.artworkTitle.trim()} onChange={(event) => updateArtworkTitle(entry, event.target.value)} placeholder="Optional" /></label>
 				<label style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '11px', cursor: 'pointer' }}><input type="checkbox" checked={entry.artworkTitleHidden} onChange={(event) => toggleArtworkTitle(entry, event.target.checked)} />Hide item title</label>
-				<label style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', minHeight: '34px', marginBottom: '9px', border: '1px solid #65727b', background: '#303c44', cursor: 'pointer' }}><ImagePlus size={14} />Replace artwork<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(event) => void updateArtwork(entry, event)} /></label>
 				</>}
+				{entry.kind !== 'other' && <label style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', minHeight: '34px', marginBottom: '9px', border: '1px solid #65727b', background: '#303c44', cursor: 'pointer' }}><ImagePlus size={14} />{entry.kind === 'workshop' ? 'Replace workshop image' : 'Replace artwork'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(event) => void updateArtwork(entry, event)} /></label>}
 				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
 				</div>}
 			</div>
-			{entry.kind === 'artwork' && (entry.exportFiles?.length === 2 || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles?.length === 2 ? 'Download main and side as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles?.length === 2 ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles?.length === 2 ? 'Download ZIP' : 'Download original'}</button>}
+			{(entry.kind === 'artwork' || entry.kind === 'workshop') && ((entry.kind === 'workshop' && entry.exportFiles?.length === 5) || (entry.kind === 'artwork' && entry.exportFiles?.length === 2) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
 		</div>, host, entry?.id || 'showcase-add-controls');
 	const renderAddControl = (host: HTMLElement) => createPortal(
 		<div style={{ position: 'relative' }}>
