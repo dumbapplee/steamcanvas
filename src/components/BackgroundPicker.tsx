@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, RotateCcw, Search, Sparkles, Store, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, ImagePlus, LoaderCircle, RotateCcw, Search, Sparkles, Store, X } from 'lucide-react';
+import { fetchWithRetry } from '../utils/fetchWithRetry';
 
 export type SteamBackground = {
 	id: string;
@@ -7,7 +8,7 @@ export type SteamBackground = {
 	game: string;
 	price: string;
 	imageUrl: string;
-	marketUrl: string;
+	steamUrl: string;
 	animated?: boolean;
 	videoPoster?: string;
 	videoWebm?: string;
@@ -36,6 +37,7 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 	const [items, setItems] = useState<SteamBackground[]>([]);
 	const [totalCount, setTotalCount] = useState(0);
 	const [loading, setLoading] = useState(false);
+	const [retryAttempt, setRetryAttempt] = useState(0);
 	const [error, setError] = useState('');
 	const [expanded, setExpanded] = useState(false);
 	const dialogRef = useRef<HTMLDialogElement>(null);
@@ -58,8 +60,9 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 			: `/api/points-backgrounds${pointShopCursors.current[page] ? `?${new URLSearchParams({ cursor: pointShopCursors.current[page] || '' })}` : ''}`;
 
 		setLoading(true);
+		setRetryAttempt(0);
 		setError('');
-		fetch(url, { signal: controller.signal })
+		fetchWithRetry(url, { signal: controller.signal }, { onRetry: setRetryAttempt })
 			.then(async (response) => {
 				const result = await response.json() as BackgroundResponse;
 				if (!response.ok) throw new Error(result.error || 'Could not load Steam backgrounds.');
@@ -77,7 +80,10 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 				setTotalCount(0);
 			})
 			.finally(() => {
-				if (!controller.signal.aborted) setLoading(false);
+				if (!controller.signal.aborted) {
+					setLoading(false);
+					setRetryAttempt(0);
+				}
 			});
 
 		return () => controller.abort();
@@ -104,6 +110,9 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 	const hasNextPage = source === 'market' ? (page + 1) * pageSize < totalCount : Boolean(pointShopCursors.current[page + 1]);
 	const previewImage = value ? `url("${value.imageUrl}")` : sourceBackgroundImage;
 	const currentName = value?.name || (sourceBackgroundImage && sourceBackgroundImage !== 'none' ? 'Current profile background' : 'No background on profile');
+	const steamUrl = value?.steamUrl || (value?.id.startsWith('points:')
+		? `https://store.steampowered.com/points/shop/app/${value.id.slice('points:'.length).split(':')[0]}`
+		: value ? `https://steamcommunity.com/market/listings/753/${encodeURIComponent(value.id)}` : '');
 
 	return (
 		<section className="background-picker" aria-labelledby="background-picker-title">
@@ -128,6 +137,7 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 					<button className="avatar-upload-button" type="button" onClick={() => setExpanded(true)}>
 						<ImagePlus size={14} /> Replace background
 					</button>
+						{steamUrl && <a className="steam-item-link" href={steamUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={13} /> View on Steam</a>}
 				</div>
 			</div>
 
@@ -190,7 +200,7 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 								{item.price && <span className="background-option-price">{item.price}</span>}
 							</button>
 						))}
-						{loading && <div className="background-loading"><LoaderCircle className="spin" size={24} /></div>}
+						{loading && <div className="background-loading"><span><LoaderCircle className="spin" size={24} />{retryAttempt > 0 && ` Retrying (${retryAttempt}/3)`}</span></div>}
 						{!loading && !error && visibleItems.length === 0 && <p className="background-empty">No matching backgrounds.</p>}
 					</div>
 

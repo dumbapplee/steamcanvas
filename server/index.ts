@@ -185,7 +185,7 @@ app.get('/api/backgrounds', async (request, response) => {
         game: description.type.replace(/\s+profile background$/i, ''),
         price: item.sell_price_text || '',
         imageUrl: `https://${steamImageHost}/economy/image/${iconUrl}`,
-        marketUrl: new URL(`/market/listings/753/${encodeURIComponent(hashName)}`, `https://${steamHost}`).href,
+        steamUrl: new URL(`/market/listings/753/${encodeURIComponent(hashName)}`, `https://${steamHost}`).href,
       }];
     });
 
@@ -205,7 +205,7 @@ app.get('/api/points-backgrounds', async (request, response) => {
     return;
   }
 
-  const cacheKey = `points:${cursor || 'first'}`;
+  const cacheKey = `points-v3:${cursor || 'first'}`;
   try {
     const payload = await getCachedCatalog(cacheKey, async () => {
   const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
@@ -234,7 +234,7 @@ app.get('/api/points-backgrounds', async (request, response) => {
         price: '',
         imageUrl: `https://community.fastly.steamstatic.com/economy/profilebackground/items/${appid}/${image}?size=320x200`,
         videoPoster: `${assetBase}${image}`,
-        marketUrl: 'https://store.steampowered.com/points/shop/c/backgrounds/cluster/1',
+        steamUrl: `https://store.steampowered.com/points/shop/app/${appid}`,
         animated: true,
         videoWebm: data.item_movie_webm ? `${assetBase}${data.item_movie_webm}` : undefined,
         videoMp4: data.item_movie_mp4 ? `${assetBase}${data.item_movie_mp4}` : undefined,
@@ -263,7 +263,7 @@ app.get('/api/avatar-frames', async (request, response) => {
     return;
   }
 
-  const cacheKey = `frames:${cursor || 'first'}`;
+  const cacheKey = `frames-v3:${cursor || 'first'}`;
   try {
     const payload = await getCachedCatalog(cacheKey, async () => {
   const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
@@ -291,6 +291,7 @@ app.get('/api/avatar-frames', async (request, response) => {
         game: String(appid),
         imageUrl: `${assetBase}${image}`,
         thumbnailUrl: `${assetBase}${data.item_image_small || image}`,
+        steamUrl: `https://store.steampowered.com/points/shop/app/${appid}`,
         animatedImageUrl: data.animated && data.item_image_small ? `${assetBase}${data.item_image_small}` : undefined,
         animated: Boolean(data.animated),
       }];
@@ -318,7 +319,7 @@ app.get('/api/profile-themes', async (request, response) => {
     return;
   }
 
-  const cacheKey = `profile-themes-v3:${cursor || 'first'}`;
+  const cacheKey = `profile-themes-v5:${cursor || 'first'}`;
   try {
     const payload = await getCachedCatalog(cacheKey, async () => {
       const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
@@ -353,6 +354,7 @@ app.get('/api/profile-themes', async (request, response) => {
           bundleDefids: definition.bundle_defids,
           imageUrl: `${assetBase}${image}`,
           thumbnailUrl: `${assetBase}${data.item_image_small || image}`,
+          steamUrl: `https://store.steampowered.com/points/shop/app/${appid}`,
         }];
       });
 

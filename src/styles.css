@@ -113,6 +113,9 @@ a { color: inherit; }
 .background-current-row { display: flex; align-items: center; gap: 12px; margin: 15px 0 2px; }
 .background-current-preview { width: 98px; height: 60px; flex: 0 0 auto; border: 1px solid #d9dcd6; background-color: #e5e7df; background-position: center; background-size: cover; }
 .background-current-actions { min-width: 0; display: grid; justify-items: start; gap: 7px; }
+.steam-item-link { display: inline-flex; align-items: center; gap: 5px; color: #526c2c; font-size: 10px; text-decoration: none; }
+.steam-item-link:hover { color: #34491c; text-decoration: underline; }
+.steam-item-link:focus-visible { outline: 2px solid #819b4a; outline-offset: 2px; }
 .background-current-name { max-width: 100%; overflow: hidden; color: #6e7771; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .background-current-actions .avatar-upload-button { white-space: nowrap; }
 .background-search { height: 35px; display: flex; align-items: center; gap: 8px; margin-top: 13px; padding: 0 5px 0 9px; border: 1px solid #d9dcd6; background: #fff; color: #929995; }

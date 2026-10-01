@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, RotateCcw, Search, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, ImagePlus, LoaderCircle, RotateCcw, Search, X } from 'lucide-react';
+import { fetchWithRetry } from '../utils/fetchWithRetry';
 
 export type SteamAvatarFrame = {
 	id: string;
@@ -7,6 +8,7 @@ export type SteamAvatarFrame = {
 	game: string;
 	imageUrl: string;
 	thumbnailUrl: string;
+	steamUrl: string;
 	animatedImageUrl?: string;
 	animated: boolean;
 };
@@ -33,6 +35,7 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 	const [items, setItems] = useState<SteamAvatarFrame[]>([]);
 	const [totalCount, setTotalCount] = useState(0);
 	const [loading, setLoading] = useState(false);
+	const [retryAttempt, setRetryAttempt] = useState(0);
 	const [error, setError] = useState('');
 	const [expanded, setExpanded] = useState(false);
 	const dialogRef = useRef<HTMLDialogElement>(null);
@@ -53,8 +56,9 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 		const cursor = cursors.current[page];
 		const url = cursor ? `/api/avatar-frames?${new URLSearchParams({ cursor })}` : '/api/avatar-frames';
 		setLoading(true);
+		setRetryAttempt(0);
 		setError('');
-		fetch(url, { signal: controller.signal })
+		fetchWithRetry(url, { signal: controller.signal }, { onRetry: setRetryAttempt })
 			.then(async (response) => {
 				const result = await response.json() as AvatarFrameResponse;
 				if (!response.ok) throw new Error(result.error || 'Could not load Steam avatar frames.');
@@ -72,7 +76,10 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 				setTotalCount(0);
 			})
 			.finally(() => {
-				if (!controller.signal.aborted) setLoading(false);
+				if (!controller.signal.aborted) {
+					setLoading(false);
+					setRetryAttempt(0);
+				}
 			});
 
 		return () => controller.abort();
@@ -97,6 +104,9 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 	const pageCount = Math.ceil(totalCount / pageSize);
 	const currentFrameUrl = value?.imageUrl || sourceFrameImage;
 	const currentFrameName = value?.name || (sourceFrameImage ? 'Current avatar frame' : 'No frame on avatar');
+	const steamUrl = value?.steamUrl || (value
+		? `https://store.steampowered.com/points/shop/app/${value.game}`
+		: '');
 
 	return (
 		<section className="avatar-frame-picker" aria-labelledby="avatar-frame-picker-title">
@@ -122,6 +132,7 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 					<button className="avatar-upload-button" type="button" onClick={() => setExpanded(true)}>
 						<ImagePlus size={14} /> Replace frame
 					</button>
+						{steamUrl && <a className="steam-item-link" href={steamUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={13} /> View on Steam</a>}
 				</div>
 			</div>
 
@@ -174,7 +185,7 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 								{frame.animated && <span className="avatar-frame-animation-mark">ANIMATED</span>}
 							</button>
 						))}
-						{loading && <div className="background-loading"><LoaderCircle className="spin" size={24} /></div>}
+						{loading && <div className="background-loading"><span><LoaderCircle className="spin" size={24} />{retryAttempt > 0 && ` Retrying (${retryAttempt}/3)`}</span></div>}
 						{!loading && !error && visibleItems.length === 0 && <p className="background-empty">No matching avatar frames.</p>}
 					</div>
 
