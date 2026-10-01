@@ -126,6 +126,77 @@ function makeArtworkShowcase(document: Document, kind: Exclude<ShowcaseKind, 'ot
 	return showcase;
 }
 
+function makeWorkshopShowcase(document: Document): HTMLElement {
+	const showcase = document.createElement('div');
+	showcase.className = 'profile_customization';
+	showcase.dataset.steamcanvasNewShowcase = 'true';
+
+	const header = document.createElement('div');
+	header.className = 'profile_customization_header';
+	header.textContent = 'Workshop Showcase';
+	const ownerHeader = document.createElement('div');
+	ownerHeader.className = 'myworkshop_showcase_header';
+	const avatar = document.createElement('div');
+	avatar.className = 'playerAvatar offline';
+	const avatarLink = document.createElement('a');
+	avatarLink.href = '#';
+	const avatarImage = document.createElement('img');
+	avatarImage.src = document.querySelector<HTMLImageElement>('.playerAvatarAutoSizeInner > picture img')?.src || '';
+	avatarImage.alt = '';
+	avatarLink.append(avatarImage);
+	avatar.append(avatarLink);
+	const ownerName = document.createElement('a');
+	ownerName.className = 'myworkshop_playerName';
+	ownerName.href = '#';
+	ownerName.textContent = `${document.querySelector<HTMLElement>('.actual_persona_name')?.textContent?.trim() || 'Steam user'}'s Workshop`;
+	ownerHeader.append(avatar, ownerName);
+	const block = document.createElement('div');
+	block.className = 'profile_customization_block';
+	const content = document.createElement('div');
+	content.className = 'myworkshop_showcase';
+
+	for (let index = 0; index < 5; index += 1) {
+		const slot = document.createElement('div');
+		slot.className = 'workshop_showcase_mutiitem_ctn';
+		slot.dataset.steamcanvasEmptySlot = 'true';
+		const innerSlot = document.createElement('div');
+		innerSlot.className = 'workshop_showcase_multiitem showcase_slot';
+		const anchor = document.createElement('a');
+		anchor.className = 'ugc';
+		anchor.href = '#';
+		const image = document.createElement('img');
+		image.className = 'workshop_showcase_item_image';
+		image.alt = '';
+		image.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="126" height="84" viewBox="0 0 126 84"><rect width="126" height="84" fill="#344b5b"/></svg>')}`;
+		anchor.append(image);
+		innerSlot.append(anchor);
+		slot.append(innerSlot);
+		content.append(slot);
+	}
+
+	const clear = document.createElement('div');
+	clear.style.clear = 'left';
+	const stats = document.createElement('div');
+	stats.className = 'showcase_stats_row showcase_content_bg';
+	for (const label of ['Submissions', 'Followers']) {
+		const stat = document.createElement(label === 'Submissions' ? 'a' : 'div');
+		stat.className = 'showcase_stat';
+		if (label === 'Submissions') stat.setAttribute('href', '#');
+		const value = document.createElement('div');
+		value.className = 'value';
+		value.textContent = '0';
+		const statLabel = document.createElement('div');
+		statLabel.className = 'label';
+		statLabel.textContent = label;
+		stat.append(value, statLabel);
+		stats.append(stat);
+	}
+	content.append(clear, stats);
+	block.append(content);
+	showcase.append(header, ownerHeader, block);
+	return showcase;
+}
+
 async function splitArtworkMosaic(file: File): Promise<ArtworkMosaic> {
 	const dataUrl = await new Promise<string>((resolve, reject) => {
 		const reader = new FileReader();
@@ -552,10 +623,14 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 	function addShowcase() {
 		const area = getShowcaseArea(previewDocument, true);
 		if (!area) return;
-		const element = makeArtworkShowcase(globalThis.document, newShowcaseKind);
+		const element = newShowcaseKind === 'workshop'
+			? makeWorkshopShowcase(area.ownerDocument)
+			: makeArtworkShowcase(area.ownerDocument, newShowcaseKind);
 		const id = `showcase-new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 		element.dataset.steamcanvasShowcaseId = id;
-		const title = newShowcaseKind === 'featured-artwork' ? 'Featured Artwork Showcase' : 'Artwork Showcase';
+		const title = newShowcaseKind === 'workshop'
+			? 'Workshop Showcase'
+			: newShowcaseKind === 'featured-artwork' ? 'Featured Artwork Showcase' : 'Artwork Showcase';
 		const host = createOverlayHost(area.ownerDocument, element, id);
 		const entry: ShowcaseEntry = { id, kind: newShowcaseKind, title, artworkTitle: '', artworkTitleHidden: false, element, host };
 		const placeholder = [...area.children].find((child) => child.classList.contains('customization_edit')) || null;
@@ -822,7 +897,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			<button type="button" className="showcase-add-trigger" style={floatingAddButtonStyle} title="Add showcase" aria-label="Add showcase" onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}><Plus size={18} color="#ffffff" />Add showcase</button>
 			{addingOpen && <div style={addPopoverStyle} onClick={(event) => event.stopPropagation()}>
 				<div style={{ marginBottom: '10px', color: '#e9eef0', fontSize: '14px', fontWeight: 700 }}>Add a showcase</div>
-				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Showcase type</span><select style={fieldStyle} value={newShowcaseKind} onChange={(event) => setNewShowcaseKind(event.target.value as Exclude<ShowcaseKind, 'other'>)}><option value="artwork">Artwork</option><option value="featured-artwork">Featured artwork</option></select></label>
+				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Showcase type</span><select style={fieldStyle} value={newShowcaseKind} onChange={(event) => setNewShowcaseKind(event.target.value as Exclude<ShowcaseKind, 'other'>)}><option value="artwork">Artwork</option><option value="featured-artwork">Featured artwork</option><option value="workshop">Workshop</option></select></label>
 				<button type="button" style={{ ...buttonStyle, width: '100%', marginTop: '2px', background: '#52752a', borderColor: '#789c42', color: '#ffffff' }} onClick={addShowcase}><Plus size={14} color="#ffffff" />Add</button>
 				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
 			</div>}
