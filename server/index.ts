@@ -87,6 +87,7 @@ const catalogCache = new Map<string, { expiresAt: number; payload: unknown }>();
 const catalogRequests = new Map<string, Promise<unknown>>();
 const catalogCacheTtlMs = 3 * 60 * 60 * 1000;
 const catalogCacheMaxEntries = 500;
+const profileCacheTtlMs = 10 * 60 * 1000;
 
 function retryDelayMs(error: unknown, attempt: number): number {
   if (axios.isAxiosError(error)) {
@@ -124,7 +125,7 @@ async function getSteamHtmlWithRetry(url: string): Promise<{ data: string; respo
   throw new Error('Steam request failed after retries.');
 }
 
-async function getCachedCatalog<T>(key: string, loadCatalog: () => Promise<T>): Promise<T> {
+async function getCachedCatalog<T>(key: string, loadCatalog: () => Promise<T>, ttlMs = catalogCacheTtlMs): Promise<T> {
   const cached = catalogCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.payload as T;
 
@@ -141,7 +142,7 @@ async function getCachedCatalog<T>(key: string, loadCatalog: () => Promise<T>): 
       if (oldestKey === undefined) break;
       catalogCache.delete(oldestKey);
     }
-    catalogCache.set(key, { expiresAt: now + catalogCacheTtlMs, payload });
+    catalogCache.set(key, { expiresAt: now + ttlMs, payload });
     return payload;
   }).finally(() => {
     catalogRequests.delete(key);
@@ -638,19 +639,21 @@ app.post('/api/profile', async (request, response) => {
   }
 
   try {
-    const result = await axios.get<string>(profileUrl.href, {
-      timeout: 15000,
-      maxRedirects: 5,
-      responseType: 'text',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml',
-      },
-    });
-    const resolvedUrl = result.request?.res?.responseUrl || profileUrl.href;
-    const profile = makeInertDocument(result.data, resolvedUrl);
+    const profile = await getCachedCatalog(`profile:${profileUrl.href}`, async () => {
+      const result = await axios.get<string>(profileUrl.href, {
+        timeout: 15000,
+        maxRedirects: 5,
+        responseType: 'text',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml',
+        },
+      });
+      const resolvedUrl = result.request?.res?.responseUrl || profileUrl.href;
+      return { ...makeInertDocument(result.data, resolvedUrl), url: resolvedUrl };
+    }, profileCacheTtlMs);
     response.setHeader('Cache-Control', 'no-store');
-    response.json({ ...profile, url: resolvedUrl });
+    response.json(profile);
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 404) {
       response.status(404).json({ error: 'Steam could not find that profile.' });
