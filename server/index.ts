@@ -313,6 +313,7 @@ function makeInertDocument(html: string, pageUrl: string): { html: string; name:
   $('#global_header').remove();
   $('script, iframe, object, embed').remove();
   $('*').each((_, element) => {
+    if (!('attribs' in element)) return;
     for (const attribute of Object.keys(element.attribs)) {
       if (attribute.toLowerCase().startsWith('on')) $(element).removeAttr(attribute);
     }

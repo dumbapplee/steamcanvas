@@ -3,6 +3,7 @@ import { ArrowUpRight, CircleHelp, ExternalLink, LoaderCircle, PanelsTopLeft, Se
 import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './components/AvatarEditor';
 import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFramePicker';
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
+import ShowcaseEditor from './components/ShowcaseEditor';
 
 type ProfilePreview = {
   name: string;
@@ -20,8 +21,10 @@ export default function App() {
   const [avatarEdit, setAvatarEdit] = useState<AvatarEditState>(DEFAULT_AVATAR_EDIT);
   const [avatarFrame, setAvatarFrame] = useState<SteamAvatarFrame | null>(null);
   const [background, setBackground] = useState<SteamBackground | null>(null);
+  const [previewLevel, setPreviewLevel] = useState(0);
   const [sourceBackgroundImage, setSourceBackgroundImage] = useState('');
   const [sourceAvatarFrameImage, setSourceAvatarFrameImage] = useState('');
+  const [showcaseDocument, setShowcaseDocument] = useState<Document | null>(null);
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const sourceBackgroundStyle = useRef<string | null>(null);
@@ -92,6 +95,12 @@ export default function App() {
 
   useEffect(() => {
     if (!profile || !previewLoaded) return;
+    const level = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.profile_header_badgeinfo .friendPlayerLevelNum');
+    if (level) level.textContent = String(previewLevel);
+  }, [previewLevel, previewLoaded, profile]);
+
+  useEffect(() => {
+    if (!profile || !previewLoaded) return;
 
     const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
     if (!page) return;
@@ -149,9 +158,11 @@ export default function App() {
     setError('');
     setProfile(null);
     setPreviewLoaded(false);
+    setShowcaseDocument(null);
     setAvatarEdit(DEFAULT_AVATAR_EDIT);
     setAvatarFrame(null);
     setBackground(null);
+    setPreviewLevel(0);
     setSourceBackgroundImage('');
     setSourceAvatarFrameImage('');
     sourceBackgroundStyle.current = null;
@@ -166,7 +177,9 @@ export default function App() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Could not load this profile.');
-      setProfile(result as ProfilePreview);
+      const loadedProfile = result as ProfilePreview;
+      setProfile(loadedProfile);
+      setPreviewLevel(loadedProfile.level ?? 0);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Something went wrong while loading the profile.');
     } finally {
@@ -237,6 +250,7 @@ export default function App() {
                 onChange={setAvatarFrame}
               />
               <BackgroundPicker sourceBackgroundImage={sourceBackgroundImage} value={background} onChange={setBackground} />
+              <ShowcaseEditor previewDocument={showcaseDocument} previewLevel={previewLevel} onPreviewLevelChange={setPreviewLevel} />
             </>
           )}
 
@@ -261,6 +275,7 @@ export default function App() {
                 srcDoc={profile.html}
                 onLoad={() => {
                   const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
+                  const document = previewFrame.current?.contentDocument;
                   const animatedBackground = page?.querySelector<HTMLElement>('.profile_animated_background');
                   const avatarFrameElement = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.playerAvatarAutoSizeInner .profile_avatar_frame');
                   const avatarFrameImage = avatarFrameElement?.querySelector<HTMLImageElement>('img');
@@ -270,6 +285,7 @@ export default function App() {
                   const poster = animatedBackground?.querySelector<HTMLVideoElement>('video')?.poster;
                   setSourceBackgroundImage(poster ? `url("${poster}")` : page ? getComputedStyle(page).backgroundImage : '');
                   setSourceAvatarFrameImage(avatarFrameImage?.currentSrc || avatarFrameImage?.src || '');
+                  setShowcaseDocument(document || null);
                   setPreviewLoaded(true);
                 }}
               />
