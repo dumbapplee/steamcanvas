@@ -46,14 +46,24 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 	const [error, setError] = useState('');
 	const [query, setQuery] = useState('');
 	const [applyingThemeId, setApplyingThemeId] = useState<string | null>(null);
+	const [retryAttempt, setRetryAttempt] = useState(0);
 	const cursors = useRef<Array<string | null>>([null]);
 	const dialogRef = useRef<HTMLDialogElement>(null);
+	const applyController = useRef<AbortController | null>(null);
 
 	useEffect(() => {
 		const dialog = dialogRef.current;
 		if (!dialog) return;
 		if (expanded && !dialog.open) dialog.showModal();
 		if (!expanded && dialog.open) dialog.close();
+	}, [expanded]);
+
+	useEffect(() => {
+		if (expanded) return;
+		applyController.current?.abort();
+		applyController.current = null;
+		setApplyingThemeId(null);
+		setRetryAttempt(0);
 	}, [expanded]);
 
 	useEffect(() => {
@@ -87,7 +97,11 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 	}, [expanded, page]);
 
 	async function applyTheme(theme: SteamProfileTheme) {
+		applyController.current?.abort();
+		const controller = new AbortController();
+		applyController.current = controller;
 		setApplyingThemeId(theme.id);
+		setRetryAttempt(0);
 		setError('');
 		try {
 			if (theme.profileThemeId !== 'GameProfile') {
@@ -97,15 +111,54 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 			}
 
 			const params = new URLSearchParams({ appid: String(theme.appid), itemtype: String(theme.communityItemType) });
-			const response = await fetch(`/api/profile-theme-style?${params}`, { cache: 'no-cache' });
-			const result = await response.json() as ProfileThemeStyleResponse;
-			if (!response.ok) throw new Error(result.error || 'Could not load the Steam profile theme.');
+			let result: ProfileThemeStyleResponse | null = null;
+			let lastError: Error | null = null;
+			for (let attempt = 0; attempt <= 3; attempt += 1) {
+				if (controller.signal.aborted) return;
+				let retryable = true;
+				try {
+					const response = await fetch(`/api/profile-theme-style?${params}`, { cache: 'no-cache', signal: controller.signal });
+					const payload = await response.json() as ProfileThemeStyleResponse;
+					if (response.ok) {
+						result = payload;
+						break;
+					}
+					lastError = new Error(payload.error || 'Could not load the Steam profile theme.');
+					retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+					if (!retryable) break;
+				} catch (caught) {
+					if (controller.signal.aborted) return;
+					lastError = caught instanceof Error ? caught : new Error('Could not load the Steam profile theme.');
+					if (!retryable || attempt === 3) break;
+				}
+				if (attempt === 3) break;
+				setRetryAttempt(attempt + 1);
+				await new Promise<void>((resolve, reject) => {
+					const finish = () => {
+						controller.signal.removeEventListener('abort', abort);
+						resolve();
+					};
+					const timeout = globalThis.setTimeout(finish, 1000 * (attempt + 1));
+					const abort = () => {
+						globalThis.clearTimeout(timeout);
+						controller.signal.removeEventListener('abort', abort);
+						reject(new DOMException('Aborted', 'AbortError'));
+					};
+					controller.signal.addEventListener('abort', abort, { once: true });
+				});
+			}
+			if (!result) throw lastError || new Error('Could not load the Steam profile theme after 3 retries.');
 			onApply({ id: theme.id, name: theme.name, variables: result.variables });
 			setExpanded(false);
 		} catch (caught) {
+			if (caught instanceof DOMException && caught.name === 'AbortError') return;
 			setError(caught instanceof Error ? caught.message : 'Could not load the Steam profile theme.');
 		} finally {
-			setApplyingThemeId(null);
+			if (applyController.current === controller) {
+				applyController.current = null;
+				setApplyingThemeId(null);
+				setRetryAttempt(0);
+			}
 		}
 	}
 
@@ -169,7 +222,7 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 								<img src={theme.imageUrl} alt="" loading="lazy" />
 								<span className="profile-theme-option-name">{theme.name}</span>
 								<span className="profile-theme-option-game">{theme.game}</span>
-								<span className="profile-theme-option-action">{applyingThemeId === theme.id ? <><LoaderCircle className="spin" size={12} /> Applying</> : value?.id === theme.id ? <><Check size={12} /> Applied to preview</> : 'Apply to preview'}</span>
+								<span className="profile-theme-option-action">{applyingThemeId === theme.id ? <><LoaderCircle className="spin" size={12} /> {retryAttempt ? `Retrying (${retryAttempt}/3)` : 'Applying'}</> : value?.id === theme.id ? <><Check size={12} /> Applied to preview</> : 'Apply to preview'}</span>
 							</button>
 						))}
 						{loading && <div className="background-loading"><LoaderCircle className="spin" size={24} /></div>}
