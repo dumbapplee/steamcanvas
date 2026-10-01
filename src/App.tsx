@@ -4,7 +4,7 @@ import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './compo
 import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFramePicker';
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
 import ProfileThemePicker, { type AppliedProfileTheme } from './components/ProfileThemePicker';
-import ShowcaseEditor from './components/ShowcaseEditor';
+import ShowcaseEditor, { type RemovedShowcase } from './components/ShowcaseEditor';
 
 type ProfilePreview = {
   name: string;
@@ -19,6 +19,7 @@ type ProjectDraft = {
   version: 1;
   profileIdentifier: string;
   showcaseAreaHtml: string;
+  removedShowcases?: RemovedShowcase[];
   settings: {
     avatarEdit: AvatarEditState;
     avatarFrame: SteamAvatarFrame | null;
@@ -125,6 +126,14 @@ function isProjectDraft(value: unknown): value is ProjectDraft {
     && draft.version === 1
     && typeof draft.profileIdentifier === 'string'
     && typeof draft.showcaseAreaHtml === 'string'
+    && (draft.removedShowcases === undefined || (Array.isArray(draft.removedShowcases) && draft.removedShowcases.every((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const showcase = item as Record<string, unknown>;
+      return typeof showcase.key === 'string' && typeof showcase.title === 'string'
+        && typeof showcase.html === 'string' && Number.isInteger(showcase.index)
+        && (showcase.beforeKey === null || typeof showcase.beforeKey === 'string')
+        && (showcase.afterKey === null || typeof showcase.afterKey === 'string');
+    })))
     && avatarIsValid
     && frameIsValid
     && backgroundIsValid
@@ -146,6 +155,8 @@ export default function App() {
   const [sourceAvatarFrameImage, setSourceAvatarFrameImage] = useState('');
   const [showcaseDocument, setShowcaseDocument] = useState<Document | null>(null);
   const [showcaseAddTarget, setShowcaseAddTarget] = useState<HTMLDivElement | null>(null);
+  const [showcaseTrashTarget, setShowcaseTrashTarget] = useState<HTMLDivElement | null>(null);
+  const [removedShowcases, setRemovedShowcases] = useState<RemovedShowcase[]>([]);
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [projectStatus, setProjectStatus] = useState('Autosave ready');
   const [savedDraft, setSavedDraft] = useState<ProjectDraft | null>(null);
@@ -321,6 +332,7 @@ export default function App() {
     setProfile(null);
     setPreviewLoaded(false);
     setShowcaseDocument(null);
+    setRemovedShowcases(draft?.removedShowcases || []);
     setAvatarEdit(draft?.settings.avatarEdit || DEFAULT_AVATAR_EDIT);
     setAvatarFrame(draft?.settings.avatarFrame || null);
     setBackground(draft?.settings.background || null);
@@ -366,6 +378,7 @@ export default function App() {
       version: 1,
       profileIdentifier: profile.url,
       showcaseAreaHtml: serializeShowcaseArea(document),
+      removedShowcases,
       settings: { avatarEdit, avatarFrame, background, profileTheme, previewLevel },
     };
   }
@@ -450,7 +463,7 @@ export default function App() {
       globalThis.clearTimeout(timer);
       observer.disconnect();
     };
-  }, [profile, previewLoaded, showcaseDocument, avatarEdit, avatarFrame, background, profileTheme, previewLevel]);
+  }, [profile, previewLoaded, showcaseDocument, avatarEdit, avatarFrame, background, profileTheme, previewLevel, removedShowcases]);
 
   return (
     <main className={`app-shell${profile ? ' has-profile' : ''}`}>
@@ -654,7 +667,15 @@ export default function App() {
               </div>
             )}
             {loading && <div className="loading-cover"><LoaderCircle className="spin" size={24} /><span>FETCHING PUBLIC PROFILE</span></div>}
-                <ShowcaseEditor previewDocument={showcaseDocument} profileUrl={profile?.url || ''} addControlTarget={showcaseAddTarget} />
+                <ShowcaseEditor
+                  previewDocument={showcaseDocument}
+                  profileUrl={profile?.url || ''}
+                  addControlTarget={showcaseAddTarget}
+                  trashControlTarget={showcaseTrashTarget}
+                  removedShowcases={removedShowcases}
+                  onRemovedShowcasesChange={setRemovedShowcases}
+                />
+                {profile && <div className="showcase-trash-slot" ref={setShowcaseTrashTarget} />}
           </div>
         </section>
       </section>

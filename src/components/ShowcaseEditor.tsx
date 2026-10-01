@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Download, ImagePlus, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, ImagePlus, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
@@ -18,6 +18,15 @@ type ShowcaseEntry = {
 	host: HTMLElement;
 };
 
+export type RemovedShowcase = {
+	key: string;
+	title: string;
+	html: string;
+	index: number;
+	beforeKey: string | null;
+	afterKey: string | null;
+};
+
 type PublicScreenshot = { id: string; imageUrl: string; thumbnailUrl: string; fullImageUrl?: string; steamUrl: string; searchText?: string; appid?: number; aspectRatio?: number };
 type EditorSource = File | PublicScreenshot;
 
@@ -25,6 +34,9 @@ type ShowcaseEditorProps = {
 	previewDocument: Document | null;
 	profileUrl: string;
 	addControlTarget: HTMLElement | null;
+	trashControlTarget: HTMLElement | null;
+	removedShowcases: RemovedShowcase[];
+	onRemovedShowcasesChange: (showcases: RemovedShowcase[]) => void;
 };
 
 type ArtworkMosaic = {
@@ -574,7 +586,7 @@ function sourceName(source: EditorSource): string {
 	return isPublicScreenshot(source) ? `Screenshot ${source.id}` : source.name;
 }
 
-export default function ShowcaseEditor({ previewDocument, profileUrl, addControlTarget }: ShowcaseEditorProps) {
+export default function ShowcaseEditor({ previewDocument, profileUrl, addControlTarget, trashControlTarget, removedShowcases, onRemovedShowcasesChange }: ShowcaseEditorProps) {
 	const [entries, setEntries] = useState<ShowcaseEntry[]>([]);
 	const [newShowcaseKind, setNewShowcaseKind] = useState<CreatableShowcaseKind>('artwork');
 	const [error, setError] = useState('');
@@ -595,6 +607,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 	const [publicScreenshotHasMore, setPublicScreenshotHasMore] = useState(true);
 	const [addingOpen, setAddingOpen] = useState(false);
 	const [addControlHost, setAddControlHost] = useState<HTMLElement | null>(null);
+	const [trashHost, setTrashHost] = useState<HTMLElement | null>(null);
+	const [trashOpen, setTrashOpen] = useState(false);
 	const [draggingShowcaseId, setDraggingShowcaseId] = useState<string | null>(null);
 	const [dragTargetShowcaseId, setDragTargetShowcaseId] = useState<string | null>(null);
 	const [hoveredShowcaseId, setHoveredShowcaseId] = useState<string | null>(null);
@@ -630,6 +644,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 			.map((child, index) => {
 				const element = child as HTMLElement;
 				const id = `showcase-${index}-${Math.random().toString(36).slice(2, 8)}`;
+				element.dataset.steamcanvasRestoreKey ||= `showcase-key-${Math.random().toString(36).slice(2, 12)}`;
 				element.dataset.steamcanvasShowcaseId = id;
 				const title = element.querySelector<HTMLElement>('.profile_customization_header')?.textContent?.trim()
 					|| 'Profile showcase';
@@ -660,6 +675,37 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 			addHost?.remove();
 		};
 	}, [addControlTarget, previewDocument]);
+
+	useEffect(() => {
+		if (!trashControlTarget) return;
+		const host = trashControlTarget.ownerDocument.createElement('div');
+		trashControlTarget.append(host);
+		setTrashHost(host);
+		return () => {
+			setTrashHost(null);
+			host.remove();
+		};
+	}, [trashControlTarget]);
+
+	useEffect(() => {
+		if (!trashOpen || !trashHost) return;
+		const closeOnOutside = (event: Event) => {
+			const target = event.target as Node | null;
+			if (target && !trashHost.contains(target)) setTrashOpen(false);
+		};
+		const closeOnEscape = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') setTrashOpen(false);
+		};
+		const documents = new Set([trashHost.ownerDocument, previewDocument].filter((document): document is Document => !!document));
+		documents.forEach((document) => {
+			document.addEventListener('pointerdown', closeOnOutside, true);
+			document.addEventListener('keydown', closeOnEscape, true);
+		});
+		return () => documents.forEach((document) => {
+			document.removeEventListener('pointerdown', closeOnOutside, true);
+			document.removeEventListener('keydown', closeOnEscape, true);
+		});
+	}, [previewDocument, trashHost, trashOpen]);
 
 	useEffect(() => {
 		if (!addingOpen || !addControlHost) return;
@@ -854,9 +900,102 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 		setDragTargetShowcaseId(null);
 	}
 
+	function animateShowcaseToTrash(entry: ShowcaseEntry) {
+		const target = trashControlTarget;
+		const frame = previewDocument?.defaultView?.frameElement;
+		if (!target || !frame || !previewDocument) return;
+		const sourceRect = entry.element.getBoundingClientRect();
+		const frameRect = frame.getBoundingClientRect();
+		const targetRect = target.getBoundingClientRect();
+		const flight = entry.element.cloneNode(true) as HTMLElement;
+		flight.querySelectorAll('[data-steamcanvas-showcase-controls], [data-steamcanvas-drag-placeholder]').forEach((element) => element.remove());
+		for (const element of [flight, ...flight.querySelectorAll<HTMLElement>('*')]) {
+			element.removeAttribute('data-steamcanvas-showcase-controls');
+			element.removeAttribute('data-steamcanvas-showcase-id');
+			element.removeAttribute('data-steamcanvas-draggable');
+			element.removeAttribute('data-steamcanvas-dragging');
+		}
+		flight.setAttribute('aria-hidden', 'true');
+		flight.querySelectorAll<HTMLImageElement>('img').forEach((image) => { image.draggable = false; });
+		flight.style.setProperty('position', 'fixed', 'important');
+		flight.style.setProperty('left', `${sourceRect.left}px`, 'important');
+		flight.style.setProperty('top', `${sourceRect.top}px`, 'important');
+		flight.style.setProperty('width', `${sourceRect.width}px`, 'important');
+		flight.style.setProperty('height', `${sourceRect.height}px`, 'important');
+		flight.style.setProperty('margin', '0', 'important');
+		flight.style.setProperty('z-index', '2147483647', 'important');
+		flight.style.setProperty('pointer-events', 'none', 'important');
+		flight.style.setProperty('transform-origin', 'center center', 'important');
+		previewDocument.body.append(flight);
+		const targetX = targetRect.left + targetRect.width / 2 - frameRect.left;
+		const targetY = targetRect.top + targetRect.height / 2 - frameRect.top;
+		const deltaX = targetX - (sourceRect.left + sourceRect.width / 2);
+		const deltaY = targetY - (sourceRect.top + sourceRect.height / 2);
+		const reducedMotion = previewDocument.defaultView?.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		const animation = flight.animate([
+			{ transform: 'translate(0, 0) scale(1)', opacity: 1 },
+			{ transform: `translate(${deltaX}px, ${deltaY}px) scale(.035)`, opacity: 0 },
+		], { duration: reducedMotion ? 220 : 720, easing: 'cubic-bezier(.2,.78,.2,1)', fill: 'forwards' });
+		void animation.finished.then(() => flight.remove(), () => flight.remove());
+	}
+
 	function removeShowcase(entry: ShowcaseEntry) {
+		animateShowcaseToTrash(entry);
+		if (!entry.element.dataset.steamcanvasNewShowcase) {
+			const index = entries.findIndex((item) => item.id === entry.id);
+			const copy = entry.element.cloneNode(true) as HTMLElement;
+			copy.querySelectorAll('[data-steamcanvas-showcase-controls], [data-steamcanvas-drag-placeholder]').forEach((element) => element.remove());
+			for (const element of [copy, ...copy.querySelectorAll<HTMLElement>('*')]) {
+				element.removeAttribute('data-steamcanvas-showcase-controls');
+				element.removeAttribute('data-steamcanvas-showcase-id');
+				element.removeAttribute('data-steamcanvas-draggable');
+				element.removeAttribute('data-steamcanvas-dragging');
+			}
+			const archived: RemovedShowcase = {
+				key: entry.element.dataset.steamcanvasRestoreKey || `showcase-key-${Math.random().toString(36).slice(2, 12)}`,
+				title: entry.title,
+				html: copy.outerHTML,
+				index,
+				beforeKey: entries[index - 1]?.element.dataset.steamcanvasRestoreKey || null,
+				afterKey: entries[index + 1]?.element.dataset.steamcanvasRestoreKey || null,
+			};
+			onRemovedShowcasesChange([...removedShowcases, archived]);
+		}
 		entry.element.remove();
 		setEntries((current) => current.filter((item) => item.id !== entry.id));
+	}
+
+	function restoreRemovedShowcase(archived: RemovedShowcase) {
+		const area = getShowcaseArea(previewDocument, true);
+		if (!area) return;
+		const template = area.ownerDocument.createElement('template');
+		template.innerHTML = archived.html;
+		template.content.querySelectorAll('script, iframe, object, embed, form').forEach((element) => element.remove());
+		template.content.querySelectorAll<HTMLElement>('*').forEach((element) => {
+			for (const attribute of [...element.attributes]) {
+				if (/^on/i.test(attribute.name) || attribute.name === 'srcdoc') element.removeAttribute(attribute.name);
+				if (/^(href|src|xlink:href)$/i.test(attribute.name) && /^\s*javascript:/i.test(attribute.value)) element.removeAttribute(attribute.name);
+			}
+		});
+		const element = template.content.firstElementChild as HTMLElement | null;
+		if (!element || !element.classList.contains('profile_customization')) return;
+		element.dataset.steamcanvasRestoreKey = archived.key;
+		const id = `showcase-restored-${Math.random().toString(36).slice(2, 8)}`;
+		element.dataset.steamcanvasShowcaseId = id;
+		element.dataset.steamcanvasDraggable = 'true';
+		const host = createOverlayHost(area.ownerDocument, element, id);
+		const restored: ShowcaseEntry = { id, kind: classifyShowcase(element), title: archived.title, element, host };
+		if (restored.kind === 'featured-artwork') fitFeaturedArtwork(element);
+		const after = entries.find((entry) => entry.element.dataset.steamcanvasRestoreKey === archived.afterKey);
+		const before = entries.find((entry) => entry.element.dataset.steamcanvasRestoreKey === archived.beforeKey);
+		const fallback = entries[Math.min(archived.index, entries.length)];
+		const insertionPoint = after?.element || (before ? before.element.nextSibling : fallback?.element) || [...area.children].find((child) => child.classList.contains('customization_edit')) || null;
+		area.insertBefore(element, insertionPoint);
+		const nextEntries = [...entries];
+		const insertionIndex = after ? nextEntries.indexOf(after) : before ? nextEntries.indexOf(before) + 1 : fallback ? nextEntries.indexOf(fallback) : nextEntries.length;
+		nextEntries.splice(Math.max(0, insertionIndex), 0, restored);
+		setEntries(nextEntries);
+		onRemovedShowcasesChange(removedShowcases.filter((item) => item.key !== archived.key));
 	}
 
 	function addShowcase() {
@@ -871,6 +1010,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 				? makeScreenshotShowcase(area.ownerDocument)
 				: makeArtworkShowcase(area.ownerDocument, newShowcaseKind);
 		const id = `showcase-new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+		element.dataset.steamcanvasRestoreKey = `showcase-key-${Math.random().toString(36).slice(2, 12)}`;
 		element.dataset.steamcanvasShowcaseId = id;
 		const title = newShowcaseKind === 'workshop'
 			? 'Workshop Showcase'
@@ -1351,11 +1491,35 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, addControl
 				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
 			</div>}
 		</div>, host, 'showcase-add-controls');
+	const renderTrash = (host: HTMLElement) => createPortal(
+		<div className="showcase-trash-control">
+			{trashOpen && <section className="showcase-trash-popover" aria-label="Removed original showcases">
+				<header><strong>Removed originals</strong><span>{removedShowcases.length}</span></header>
+				{removedShowcases.length ? <div className="showcase-trash-list">
+					{removedShowcases.map((showcase) => <div className="showcase-trash-item" key={showcase.key}>
+						<span title={showcase.title}>{showcase.title}</span>
+						<button type="button" title={`Restore ${showcase.title}`} aria-label={`Restore ${showcase.title}`} onClick={() => restoreRemovedShowcase(showcase)}><RotateCcw size={14} /></button>
+					</div>)}
+				</div> : <p>No removed showcases.</p>}
+			</section>}
+			<button
+				className={`showcase-trash-button${trashOpen ? ' is-open' : ''}`}
+				type="button"
+				title="Removed original showcases"
+				aria-label={`Removed original showcases, ${removedShowcases.length} items`}
+				aria-expanded={trashOpen}
+				onClick={() => setTrashOpen((open) => !open)}
+			>
+				<Trash2 size={21} />
+				{removedShowcases.length > 0 && <span>{removedShowcases.length}</span>}
+			</button>
+		</div>, host, 'showcase-trash');
 
 	if (!previewDocument) return null;
 	return <>
 		{entries.map((entry) => renderOverlay(entry, entry.host))}
 		{addControlHost && renderAddControl(addControlHost)}
+		{trashHost && removedShowcases.length > 0 && renderTrash(trashHost)}
 		<dialog
 			ref={editorDialogRef}
 			className="showcase-editor-dialog"
