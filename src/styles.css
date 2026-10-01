@@ -87,6 +87,9 @@ a { color: inherit; }
 .avatar-frame-option-preview { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; border: 1px solid #e0e2dc; background-color: #e5e7df; background-image: conic-gradient(#daddd4 25%, #f2f2ee 0 50%, #daddd4 0 75%, #f2f2ee 0); background-size: 16px 16px; }
 .avatar-frame-option-name { min-width: 0; overflow: hidden; font-size: 10px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .avatar-frame-animation-mark { color: #718445; font-family: var(--mono); font-size: 8px; }
+.showcase-add-trigger { border: 1px solid #789c42; border-left: 3px solid #c9ef73; border-radius: 3px; background: #52752a; color: #fff; }
+.showcase-add-trigger:hover { border-color: #9fc45b; background: #5f8531; }
+.showcase-add-trigger:focus-visible { outline: 2px solid #d9f58f; outline-offset: 2px; }
 .avatar-frame-dialog .background-search { margin-top: 15px; }
 .background-picker { margin-top: 25px; padding-top: 17px; border-top: 1px solid var(--line); }
 .background-picker-heading { display: flex; align-items: center; justify-content: space-between; }

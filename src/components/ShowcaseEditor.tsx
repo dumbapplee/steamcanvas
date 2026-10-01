@@ -1,6 +1,7 @@
 import { useEffect, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, Download, ImagePlus, Pencil, Plus, Trash2 } from 'lucide-react';
+import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 
@@ -460,6 +461,29 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		});
 	}, [addingOpen, addControlHost, previewDocument]);
 
+	useEffect(() => {
+		const activeEntry = entries.find((entry) => entry.id === editingId);
+		if (!activeEntry || !previewDocument) return;
+		const editRegion = activeEntry.host.querySelector<HTMLElement>('[data-showcase-edit-region]');
+		const closeOnOutside = (event: Event) => {
+			const target = event.target as Node | null;
+			if (target && editRegion?.contains(target)) return;
+			setEditingId(null);
+		};
+		const closeOnEscape = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') setEditingId(null);
+		};
+		const documents = new Set([activeEntry.host.ownerDocument, previewDocument]);
+		documents.forEach((document) => {
+			document.addEventListener('pointerdown', closeOnOutside, true);
+			document.addEventListener('keydown', closeOnEscape, true);
+		});
+		return () => documents.forEach((document) => {
+			document.removeEventListener('pointerdown', closeOnOutside, true);
+			document.removeEventListener('keydown', closeOnEscape, true);
+		});
+	}, [editingId, entries, previewDocument]);
+
 	function syncOrder(nextEntries: ShowcaseEntry[]) {
 		const area = getShowcaseArea(previewDocument);
 		if (!area) return;
@@ -484,7 +508,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 	function addShowcase() {
 		const area = getShowcaseArea(previewDocument, true);
 		if (!area) return;
-	const element = makeArtworkShowcase(globalThis.document, newShowcaseKind);
+		const element = makeArtworkShowcase(globalThis.document, newShowcaseKind);
 		const id = `showcase-new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 		element.dataset.steamcanvasShowcaseId = id;
 		const title = newShowcaseKind === 'featured-artwork' ? 'Featured Artwork Showcase' : 'Artwork Showcase';
@@ -492,6 +516,11 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		const entry: ShowcaseEntry = { id, kind: newShowcaseKind, title, artworkTitle: '', artworkTitleHidden: false, element, host };
 		const placeholder = [...area.children].find((child) => child.classList.contains('customization_edit')) || null;
 		area.insertBefore(element, placeholder);
+		const previewWindow = area.ownerDocument.defaultView;
+		if (previewWindow) {
+			const targetTop = element.getBoundingClientRect().top + previewWindow.scrollY - 24;
+			previewWindow.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+		}
 		setEntries((current) => [...current, entry]);
 		setAddingOpen(false);
 		setEditingId(null);
@@ -588,6 +617,43 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		}
 	}
 
+	async function downloadArtwork(entry: ShowcaseEntry) {
+		if (entry.exportFiles?.length === 2) {
+			try {
+				const archive = new JSZip();
+				for (const file of entry.exportFiles) {
+					const response = await fetch(file.url);
+					if (!response.ok) throw new Error(`Could not read ${file.name}.`);
+					archive.file(file.name, await response.blob());
+				}
+				const blob = await archive.generateAsync({ type: 'blob' });
+				const url = URL.createObjectURL(blob);
+				const baseName = entry.exportFiles[0].name.replace(/-main\.(?:png|gif)$/i, '') || 'steam-artwork';
+				const link = globalThis.document.createElement('a');
+				link.href = url;
+				link.download = `${baseName}.zip`;
+				globalThis.document.body.append(link);
+				link.click();
+				link.remove();
+				globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+				return;
+			} catch (caught) {
+				setError(caught instanceof Error ? caught.message : 'Could not create the artwork ZIP.');
+				setEditingId(entry.id);
+				return;
+			}
+		}
+
+		if (entry.animatedArtwork) {
+			const link = globalThis.document.createElement('a');
+			link.href = entry.animatedArtwork.url;
+			link.download = entry.animatedArtwork.name;
+			globalThis.document.body.append(link);
+			link.click();
+			link.remove();
+		}
+	}
+
 	function updateArtworkTitle(entry: ShowcaseEntry, title: string) {
 		const titleElement = entry.element.querySelector<HTMLElement>('.screenshot_showcase_itemname');
 		if (titleElement) {
@@ -624,16 +690,16 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 	};
 	const floatingAddButtonStyle: CSSProperties = {
 		minWidth: '154px', height: '44px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '9px', padding: '0 13px',
-		border: '1px solid #788681', borderLeft: '3px solid #c9ef73', borderRadius: '3px', background: 'rgba(27,40,56,.97)',
-		color: '#f2f4f3', cursor: 'pointer', font: '600 13px Arial,sans-serif', boxShadow: '0 4px 14px rgba(0,0,0,.42)',
+		cursor: 'pointer', font: '600 13px Arial,sans-serif', boxShadow: '0 4px 14px rgba(0,0,0,.42)',
 	};
 	const addPopoverStyle: CSSProperties = {
 		...popoverStyle, top: 'auto', bottom: '50px', left: '50%', right: 'auto', transform: 'translateX(-50%)',
 	};
 	const renderOverlay = (entry: ShowcaseEntry, index: number, host: HTMLElement) => createPortal(
 		<div style={{ position: 'relative', display: 'flex', justifyContent: 'flex-end', gap: '6px', padding: '3px', borderRadius: '4px', background: 'rgba(12,17,21,.72)', backdropFilter: 'blur(4px)' }}>
-			<button type="button" style={buttonStyle} title={`Edit ${entry.title}`} aria-label={`Edit ${entry.title}`} onClick={() => { setEditingId((id) => id === entry.id ? null : entry.id); setAddingOpen(false); }}><Pencil size={14} />Edit</button>
-			{editingId === entry.id && <div style={popoverStyle} onClick={(event) => event.stopPropagation()}>
+			<div data-showcase-edit-region="true" style={{ position: 'relative' }}>
+				<button type="button" style={buttonStyle} title={`Edit ${entry.title}`} aria-label={`Edit ${entry.title}`} onClick={() => { setEditingId((id) => id === entry.id ? null : entry.id); setAddingOpen(false); }}><Pencil size={14} />Edit</button>
+				{editingId === entry.id && <div style={popoverStyle} onClick={(event) => event.stopPropagation()}>
 				<div style={{ marginBottom: '10px', color: '#e9eef0', fontSize: '14px', fontWeight: 700 }}>{entry.title}</div>
 				<div style={{ display: 'flex', gap: '6px', marginBottom: entry.kind === 'other' ? 0 : '13px' }}>
 					<button type="button" style={{ ...buttonStyle, flex: 1 }} disabled={index === 0} onClick={() => moveShowcase(index, -1)}><ArrowUp size={14} />Move up</button>
@@ -644,19 +710,19 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Artwork title</span><input style={fieldStyle} aria-label={`Artwork title for ${entry.title}`} value={entry.artworkTitle.trim()} onChange={(event) => updateArtworkTitle(entry, event.target.value)} placeholder="Optional" /></label>
 				<label style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '11px', cursor: 'pointer' }}><input type="checkbox" checked={entry.artworkTitleHidden} onChange={(event) => toggleArtworkTitle(entry, event.target.checked)} />Hide item title</label>
 				<label style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', minHeight: '34px', marginBottom: '9px', border: '1px solid #65727b', background: '#303c44', cursor: 'pointer' }}><ImagePlus size={14} />Replace artwork<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(event) => void updateArtwork(entry, event)} /></label>
-				{entry.exportFiles?.map((file) => <a key={file.name} href={file.url} download={file.name} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', marginRight: '8px', color: '#d5e4a4', textDecoration: 'none' }}><Download size={13} />{/\-main\.(png|gif)$/i.test(file.name) ? 'Main' : 'Side'}</a>)}
-				{entry.animatedArtwork && <a href={entry.animatedArtwork.url} download={entry.animatedArtwork.name} style={{ color: '#d5e4a4', textDecoration: 'none' }}><Download size={13} />Original animation</a>}
 				</>}
 				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
-			</div>}
+				</div>}
+			</div>
+			{entry.kind === 'artwork' && (entry.exportFiles?.length === 2 || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles?.length === 2 ? 'Download main and side as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles?.length === 2 ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles?.length === 2 ? 'Download ZIP' : 'Download original'}</button>}
 		</div>, host, entry?.id || 'showcase-add-controls');
 	const renderAddControl = (host: HTMLElement) => createPortal(
 		<div style={{ position: 'relative' }}>
-			<button type="button" style={floatingAddButtonStyle} title="Add showcase" aria-label="Add showcase" onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}><Plus size={18} color="#c9ef73" />Add showcase</button>
+			<button type="button" className="showcase-add-trigger" style={floatingAddButtonStyle} title="Add showcase" aria-label="Add showcase" onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}><Plus size={18} color="#ffffff" />Add showcase</button>
 			{addingOpen && <div style={addPopoverStyle} onClick={(event) => event.stopPropagation()}>
 				<div style={{ marginBottom: '10px', color: '#e9eef0', fontSize: '14px', fontWeight: 700 }}>Add a showcase</div>
 				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Showcase type</span><select style={fieldStyle} value={newShowcaseKind} onChange={(event) => setNewShowcaseKind(event.target.value as Exclude<ShowcaseKind, 'other'>)}><option value="artwork">Artwork</option><option value="featured-artwork">Featured artwork</option></select></label>
-				<button type="button" style={{ ...buttonStyle, width: '100%', marginTop: '2px', background: '#c9ef73', borderColor: '#c9ef73', color: '#243019' }} onClick={addShowcase}><Plus size={14} />Add</button>
+				<button type="button" style={{ ...buttonStyle, width: '100%', marginTop: '2px', background: '#52752a', borderColor: '#789c42', color: '#ffffff' }} onClick={addShowcase}><Plus size={14} color="#ffffff" />Add</button>
 				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
 			</div>}
 		</div>, host, 'showcase-add-controls');
