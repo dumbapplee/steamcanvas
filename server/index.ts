@@ -57,10 +57,71 @@ type SteamPointShopResponse = {
   };
 };
 
+type PublicScreenshot = {
+  id: string;
+  imageUrl: string;
+  thumbnailUrl: string;
+  steamUrl: string;
+  appid?: number;
+  aspectRatio?: number;
+};
+
+function extractFullScreenshotUrl(html: string, pageUrl: string): string | undefined {
+  const candidates = [...html.matchAll(/https:\/\/images\.steamusercontent\.com\/ugc\/[^"'<>\s]+/gi)]
+    .map((match) => match[0].replace(/&amp;/g, '&'))
+    .map((value) => {
+      try {
+        const url = new URL(value, pageUrl);
+        return url.hostname === 'images.steamusercontent.com' ? url : undefined;
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((url): url is URL => !!url)
+    .sort((left, right) => Number(right.searchParams.get('imw') || 0) - Number(left.searchParams.get('imw') || 0));
+  return candidates[0]?.href;
+}
+
 const catalogCache = new Map<string, { expiresAt: number; payload: unknown }>();
 const catalogRequests = new Map<string, Promise<unknown>>();
 const catalogCacheTtlMs = 3 * 60 * 60 * 1000;
 const catalogCacheMaxEntries = 500;
+
+function retryDelayMs(error: unknown, attempt: number): number {
+  if (axios.isAxiosError(error)) {
+    const retryAfter = error.response?.headers?.['retry-after'];
+    const retryAfterSeconds = Number(retryAfter);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) return Math.min(15000, retryAfterSeconds * 1000);
+    if (typeof retryAfter === 'string') {
+      const retryAt = Date.parse(retryAfter);
+      if (Number.isFinite(retryAt)) return Math.min(15000, Math.max(500, retryAt - Date.now()));
+    }
+  }
+  return Math.min(8000, 750 * 2 ** attempt);
+}
+
+async function getSteamHtmlWithRetry(url: string): Promise<{ data: string; responseUrl: string }> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const result = await axios.get<string>(url, {
+        timeout: 15000,
+        maxRedirects: 5,
+        responseType: 'text',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml',
+        },
+      });
+      return { data: result.data, responseUrl: result.request?.res?.responseUrl || url };
+    } catch (error) {
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      const retryable = status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500);
+      if (!retryable || attempt === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(error, attempt)));
+    }
+  }
+  throw new Error('Steam request failed after retries.');
+}
 
 async function getCachedCatalog<T>(key: string, loadCatalog: () => Promise<T>): Promise<T> {
   const cached = catalogCache.get(key);
@@ -493,6 +554,37 @@ function resolveProfileUrl(input: unknown): URL {
   return new URL(`/${parts[0]}/${encodeURIComponent(decodeURIComponent(parts[1]))}`, `https://${steamHost}`);
 }
 
+function extractPublicScreenshots(html: string, pageUrl: string): PublicScreenshot[] {
+  const $ = load(html);
+  const screenshots: PublicScreenshot[] = [];
+  $('a.profile_media_item[data-publishedfileid]').each((_, element) => {
+    if (screenshots.length >= 50) return;
+    const item = $(element);
+    const id = item.attr('data-publishedfileid');
+    const rawImage = item.find('.imgWallItem').first().attr('style')?.match(/background-image\s*:\s*url\(['"]?([^'"\)]+)['"]?\)/i)?.[1];
+    if (!id || !rawImage) return;
+    try {
+      const thumbnailUrl = new URL(rawImage, pageUrl);
+      if (thumbnailUrl.hostname !== 'images.steamusercontent.com') return;
+      const imageUrl = new URL(thumbnailUrl.href);
+      imageUrl.search = '';
+      imageUrl.hash = '';
+      const aspectRatio = Number(item.attr('data-desired-aspect'));
+      screenshots.push({
+        id,
+        imageUrl: imageUrl.href,
+        thumbnailUrl: thumbnailUrl.href,
+        steamUrl: new URL(item.attr('href') || `/sharedfiles/filedetails/?id=${id}`, pageUrl).href,
+        ...(Number.isInteger(Number(item.attr('data-appid'))) ? { appid: Number(item.attr('data-appid')) } : {}),
+        ...(Number.isFinite(aspectRatio) && aspectRatio > 0 ? { aspectRatio } : {}),
+      });
+    } catch {
+      // Ignore malformed or non-public screenshot URLs.
+    }
+  });
+  return screenshots;
+}
+
 function makeInertDocument(html: string, pageUrl: string): { html: string; name: string; avatar?: string; level?: number } {
   const $ = load(html);
   $('#global_header').remove();
@@ -559,6 +651,57 @@ app.post('/api/profile', async (request, response) => {
       return;
     }
     response.status(502).json({ error: 'Steam did not return a usable public profile. It may be private or temporarily unavailable.' });
+  }
+});
+
+app.post('/api/profile-screenshots', async (request, response) => {
+  let profileUrl: URL;
+  try {
+    profileUrl = resolveProfileUrl(request.body?.profileUrl);
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : 'Invalid profile address.' });
+    return;
+  }
+
+  const screenshotsUrl = new URL(profileUrl);
+  screenshotsUrl.pathname = `${screenshotsUrl.pathname.replace(/\/$/, '')}/screenshots/`;
+  const requestedPage = Math.max(1, Number(request.body?.page) || 1);
+  const pageBatchSize = 6;
+  const cacheKey = `profile-screenshots:${screenshotsUrl.href}:page-${requestedPage}`;
+  try {
+    const catalog = await getCachedCatalog(cacheKey, async () => {
+      const pages = await Promise.all(Array.from({ length: pageBatchSize }, async (_, index) => {
+        const pageUrl = new URL(screenshotsUrl.href);
+        pageUrl.searchParams.set('p', String(requestedPage + index));
+        const result = await getSteamHtmlWithRetry(pageUrl.href);
+        return extractPublicScreenshots(result.data, result.responseUrl);
+      }));
+      return {
+        items: [...new Map(pages.flat().map((item) => [item.id, item])).values()],
+        hasMore: pages[pages.length - 1]?.length > 0,
+      };
+    });
+    setCatalogCacheHeaders(response);
+    response.json(catalog);
+  } catch {
+    response.status(502).json({ error: 'Steam could not load this public screenshot gallery right now.' });
+  }
+});
+
+app.post('/api/screenshot-image', async (request, response) => {
+  try {
+    const screenshotUrl = new URL(String(request.body?.steamUrl || ''));
+    if (screenshotUrl.hostname !== steamHost && screenshotUrl.hostname !== `www.${steamHost}` || screenshotUrl.pathname !== '/sharedfiles/filedetails/') {
+      throw new Error('Invalid screenshot URL.');
+    }
+    const imageUrl = await getCachedCatalog(`screenshot-image:${screenshotUrl.href}`, async () => {
+      const result = await getSteamHtmlWithRetry(screenshotUrl.href);
+      return extractFullScreenshotUrl(result.data, result.responseUrl);
+    });
+    if (!imageUrl) throw new Error('Steam did not expose a full-resolution screenshot.');
+    response.json({ imageUrl });
+  } catch {
+    response.status(502).json({ error: 'Steam could not load the full-resolution screenshot right now.' });
   }
 });
 

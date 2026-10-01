@@ -347,7 +347,7 @@ export default function App() {
               </div>
             )}
             {loading && <div className="loading-cover"><LoaderCircle className="spin" size={24} /><span>FETCHING PUBLIC PROFILE</span></div>}
-                <ShowcaseEditor previewDocument={showcaseDocument} />
+                <ShowcaseEditor previewDocument={showcaseDocument} profileUrl={profile?.url || ''} />
           </div>
           <div className="stage-footer"><span>STEAM COMMUNITY <i>·</i> PUBLIC HTML</span><span>SIMULATED VIEW <b>01</b></span></div>
         </section>
