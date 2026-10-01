@@ -229,7 +229,11 @@ app.get('/api/backgrounds', async (request, response) => {
         timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
-          Accept: 'application/json',
+          Accept: 'application/json, text/javascript, */*; q=0.01',
+          'Accept-Language': 'en-US,en;q=0.9',
+          Referer: 'https://steamcommunity.com/market/',
+          Origin: 'https://steamcommunity.com',
+          'X-Requested-With': 'XMLHttpRequest',
         },
       });
     }));
@@ -255,7 +259,11 @@ app.get('/api/backgrounds', async (request, response) => {
     });
     setCatalogCacheHeaders(response);
     response.json(payload);
-  } catch {
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 429) {
+      response.status(503).json({ error: 'Steam is temporarily limiting Market requests. Please try again in a few seconds.' });
+      return;
+    }
     response.status(502).json({ error: 'Steam could not load profile backgrounds right now.' });
   }
 });
