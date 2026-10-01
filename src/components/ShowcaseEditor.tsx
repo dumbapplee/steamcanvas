@@ -473,7 +473,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		const closeOnEscape = (event: KeyboardEvent) => {
 			if (event.key === 'Escape') setEditingId(null);
 		};
-		const documents = new Set([activeEntry.host.ownerDocument, previewDocument]);
+		const documents = new Set([activeEntry.host.ownerDocument, previewDocument, addControlHost?.ownerDocument].filter((document): document is Document => !!document));
 		documents.forEach((document) => {
 			document.addEventListener('pointerdown', closeOnOutside, true);
 			document.addEventListener('keydown', closeOnEscape, true);
@@ -482,7 +482,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			document.removeEventListener('pointerdown', closeOnOutside, true);
 			document.removeEventListener('keydown', closeOnEscape, true);
 		});
-	}, [editingId, entries, previewDocument]);
+	}, [editingId, entries, previewDocument, addControlHost]);
 
 	function syncOrder(nextEntries: ShowcaseEntry[]) {
 		const area = getShowcaseArea(previewDocument);
