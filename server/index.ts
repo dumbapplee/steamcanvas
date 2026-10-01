@@ -54,7 +54,40 @@ type SteamPointShopResponse = {
   };
 };
 
-const pointsShopCache = new Map<string, { expiresAt: number; payload: object }>();
+const catalogCache = new Map<string, { expiresAt: number; payload: unknown }>();
+const catalogRequests = new Map<string, Promise<unknown>>();
+const catalogCacheTtlMs = 3 * 60 * 60 * 1000;
+const catalogCacheMaxEntries = 500;
+
+async function getCachedCatalog<T>(key: string, loadCatalog: () => Promise<T>): Promise<T> {
+  const cached = catalogCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload as T;
+
+  const activeRequest = catalogRequests.get(key);
+  if (activeRequest) return activeRequest as Promise<T>;
+
+  const request = Promise.resolve().then(loadCatalog).then((payload) => {
+    const now = Date.now();
+    for (const [cacheKey, entry] of catalogCache) {
+      if (entry.expiresAt <= now) catalogCache.delete(cacheKey);
+    }
+    while (catalogCache.size >= catalogCacheMaxEntries) {
+      const oldestKey = catalogCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      catalogCache.delete(oldestKey);
+    }
+    catalogCache.set(key, { expiresAt: now + catalogCacheTtlMs, payload });
+    return payload;
+  }).finally(() => {
+    catalogRequests.delete(key);
+  });
+  catalogRequests.set(key, request);
+  return request;
+}
+
+function setCatalogCacheHeaders(response: express.Response): void {
+  response.setHeader('Cache-Control', `public, max-age=${catalogCacheTtlMs / 1000}`);
+}
 
 function encodeVarint(value: number): Buffer {
   const bytes: number[] = [];
@@ -102,6 +135,9 @@ app.get('/api/backgrounds', async (request, response) => {
     return;
   }
 
+  const cacheKey = `market:${query.toLowerCase()}:${start}:${count}`;
+  try {
+    const payload = await getCachedCatalog(cacheKey, async () => {
   const marketUrl = new URL('/market/search/render/', `https://${steamHost}`);
   marketUrl.searchParams.set('query', query);
   marketUrl.searchParams.set('count', '10');
@@ -112,7 +148,6 @@ app.get('/api/backgrounds', async (request, response) => {
   marketUrl.searchParams.append('category_753_item_class[]', 'tag_item_class_3');
   marketUrl.searchParams.set('norender', '1');
 
-  try {
     const pages = await Promise.all(Array.from({ length: Math.ceil(count / 10) }, (_, index) => {
       const pageUrl = new URL(marketUrl);
       pageUrl.searchParams.set('start', String(start + index * 10));
@@ -142,8 +177,10 @@ app.get('/api/backgrounds', async (request, response) => {
       }];
     });
 
-    response.setHeader('Cache-Control', 'public, max-age=60');
-    response.json({ items, totalCount: pages[0].data.total_count || 0, pageSize: count });
+      return { items, totalCount: pages[0].data.total_count || 0, pageSize: count };
+    });
+    setCatalogCacheHeaders(response);
+    response.json(payload);
   } catch {
     response.status(502).json({ error: 'Steam could not load profile backgrounds right now.' });
   }
@@ -156,20 +193,14 @@ app.get('/api/points-backgrounds', async (request, response) => {
     return;
   }
 
-  const cacheKey = cursor || 'first';
-  const cached = pointsShopCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    response.setHeader('Cache-Control', 'public, max-age=300');
-    response.json(cached.payload);
-    return;
-  }
-
+  const cacheKey = `points:${cursor || 'first'}`;
+  try {
+    const payload = await getCachedCatalog(cacheKey, async () => {
   const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
   apiUrl.searchParams.set('origin', 'https://store.steampowered.com');
   apiUrl.searchParams.set('input_protobuf_encoded', makePointsShopQuery(cursor || undefined));
   apiUrl.searchParams.set('format', 'json');
 
-  try {
     const result = await axios.get<SteamPointShopResponse>(apiUrl.href, {
       timeout: 15000,
       headers: { Accept: 'application/json' },
@@ -204,8 +235,9 @@ app.get('/api/points-backgrounds', async (request, response) => {
       pageSize: 20,
       nextCursor: pointShopResponse.next_cursor || null,
     };
-    pointsShopCache.set(cacheKey, { expiresAt: Date.now() + 300000, payload });
-    response.setHeader('Cache-Control', 'public, max-age=300');
+      return payload;
+    });
+    setCatalogCacheHeaders(response);
     response.json(payload);
   } catch {
     response.status(502).json({ error: 'Steam could not load animated Points Shop backgrounds right now.' });
@@ -219,20 +251,14 @@ app.get('/api/avatar-frames', async (request, response) => {
     return;
   }
 
-  const cacheKey = `avatar-frames:${cursor || 'first'}`;
-  const cached = pointsShopCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    response.setHeader('Cache-Control', 'public, max-age=300');
-    response.json(cached.payload);
-    return;
-  }
-
+  const cacheKey = `frames:${cursor || 'first'}`;
+  try {
+    const payload = await getCachedCatalog(cacheKey, async () => {
   const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
   apiUrl.searchParams.set('origin', 'https://store.steampowered.com');
   apiUrl.searchParams.set('input_protobuf_encoded', makePointsShopQuery(cursor || undefined, 14));
   apiUrl.searchParams.set('format', 'json');
 
-  try {
     const result = await axios.get<SteamPointShopResponse>(apiUrl.href, {
       timeout: 15000,
       headers: { Accept: 'application/json' },
@@ -264,8 +290,9 @@ app.get('/api/avatar-frames', async (request, response) => {
       pageSize: 20,
       nextCursor: pointShopResponse.next_cursor || null,
     };
-    pointsShopCache.set(cacheKey, { expiresAt: Date.now() + 300000, payload });
-    response.setHeader('Cache-Control', 'public, max-age=300');
+      return payload;
+    });
+    setCatalogCacheHeaders(response);
     response.json(payload);
   } catch {
     response.status(502).json({ error: 'Steam could not load avatar frames right now.' });
