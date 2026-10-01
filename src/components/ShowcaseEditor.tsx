@@ -5,7 +5,8 @@ import JSZip from 'jszip';
 import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 
-type ShowcaseKind = 'artwork' | 'featured-artwork' | 'workshop' | 'other';
+type ShowcaseKind = 'artwork' | 'featured-artwork' | 'screenshot' | 'workshop' | 'other';
+type CreatableShowcaseKind = 'artwork' | 'featured-artwork' | 'screenshot' | 'workshop';
 
 type ShowcaseEntry = {
 	id: string;
@@ -42,8 +43,13 @@ function getShowcaseArea(document: Document | null, create = false): HTMLElement
 
 function classifyShowcase(element: HTMLElement): ShowcaseKind {
 	if (element.querySelector('.myworkshop_showcase')) return 'workshop';
+	if (element.classList.contains('myscreenshots')) return 'screenshot';
 	if (!element.classList.contains('myart')) return 'other';
 	return element.querySelector('.screenshot_showcase_primary.single') ? 'featured-artwork' : 'artwork';
+}
+
+function hasTwoPanelImageEditor(kind: ShowcaseKind): boolean {
+	return kind === 'artwork' || kind === 'screenshot';
 }
 
 function getArtworkTitle(element: HTMLElement): string {
@@ -85,7 +91,7 @@ function makeImageSlot(document: Document, className: string, maxWidth: number):
 	return slot;
 }
 
-function makeArtworkShowcase(document: Document, kind: Exclude<ShowcaseKind, 'other'>): HTMLElement {
+function makeArtworkShowcase(document: Document, kind: 'artwork' | 'featured-artwork'): HTMLElement {
 	const featured = kind === 'featured-artwork';
 	const showcase = document.createElement('div');
 	showcase.className = 'profile_customization myart';
@@ -121,6 +127,50 @@ function makeArtworkShowcase(document: Document, kind: Exclude<ShowcaseKind, 'ot
 	}
 
 	if (featured) content.append(primary);
+	block.append(content);
+	showcase.append(header, block);
+	return showcase;
+}
+
+function makeScreenshotShowcase(document: Document): HTMLElement {
+	const showcase = document.createElement('div');
+	showcase.className = 'profile_customization myscreenshots';
+	showcase.dataset.steamcanvasNewShowcase = 'true';
+
+	const header = document.createElement('div');
+	header.className = 'profile_customization_header';
+	header.textContent = 'Screenshot Showcase';
+	const block = document.createElement('div');
+	block.className = 'profile_customization_block';
+	const content = document.createElement('div');
+	content.className = 'screenshot_showcase';
+
+	const primary = makeImageSlot(document, 'screenshot_showcase_primary showcase_slot', 506);
+	const title = document.createElement('div');
+	title.className = 'screenshot_showcase_itemname';
+	const stats = document.createElement('div');
+	stats.className = 'screenshot_showcase_stats';
+	primary.append(title, stats);
+	content.append(primary);
+
+	const right = document.createElement('div');
+	right.className = 'screenshot_showcase_rightcol';
+	for (let index = 0; index < 3; index += 1) {
+		right.append(makeImageSlot(document, 'screenshot_showcase_smallscreenshot showcase_slot', 100));
+	}
+	const screenshotCount = document.createElement('a');
+	screenshotCount.className = 'screenshot_showcase_smallscreenshot screenshot_count';
+	screenshotCount.href = '#';
+	const countLabel = document.createElement('div');
+	countLabel.className = 'screenshot_showcase_screenshot';
+	countLabel.textContent = '+ 0';
+	screenshotCount.append(countLabel);
+	right.append(screenshotCount);
+	content.append(right);
+
+	const clear = document.createElement('div');
+	clear.style.clear = 'both';
+	content.append(clear);
 	block.append(content);
 	showcase.append(header, block);
 	return showcase;
@@ -462,7 +512,7 @@ async function encodeAnimatedMosaic(file: File, mosaic: NonNullable<ArtworkMosai
 
 export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps) {
 	const [entries, setEntries] = useState<ShowcaseEntry[]>([]);
-	const [newShowcaseKind, setNewShowcaseKind] = useState<Exclude<ShowcaseKind, 'other'>>('artwork');
+	const [newShowcaseKind, setNewShowcaseKind] = useState<CreatableShowcaseKind>('artwork');
 	const [error, setError] = useState('');
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [addingOpen, setAddingOpen] = useState(false);
@@ -625,12 +675,16 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 		if (!area) return;
 		const element = newShowcaseKind === 'workshop'
 			? makeWorkshopShowcase(area.ownerDocument)
-			: makeArtworkShowcase(area.ownerDocument, newShowcaseKind);
+			: newShowcaseKind === 'screenshot'
+				? makeScreenshotShowcase(area.ownerDocument)
+				: makeArtworkShowcase(area.ownerDocument, newShowcaseKind);
 		const id = `showcase-new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 		element.dataset.steamcanvasShowcaseId = id;
 		const title = newShowcaseKind === 'workshop'
 			? 'Workshop Showcase'
-			: newShowcaseKind === 'featured-artwork' ? 'Featured Artwork Showcase' : 'Artwork Showcase';
+			: newShowcaseKind === 'screenshot'
+				? 'Screenshot Showcase'
+				: newShowcaseKind === 'featured-artwork' ? 'Featured Artwork Showcase' : 'Artwork Showcase';
 		const host = createOverlayHost(area.ownerDocument, element, id);
 		const entry: ShowcaseEntry = { id, kind: newShowcaseKind, title, artworkTitle: '', artworkTitleHidden: false, element, host };
 		const placeholder = [...area.children].find((child) => child.classList.contains('customization_edit')) || null;
@@ -659,7 +713,7 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 			: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot img')];
 		try {
 			let exportWarning = false;
-			const mosaic = entry.kind === 'artwork'
+			const mosaic = hasTwoPanelImageEditor(entry.kind)
 				? await splitArtworkMosaic(files[0])
 				: entry.kind === 'workshop'
 					? await splitWorkshopMosaic(files[0])
@@ -710,11 +764,11 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 					image.style.transformOrigin = 'top left';
 				}
 			}
-			if (entry.kind === 'artwork') {
+			if (hasTwoPanelImageEditor(entry.kind)) {
 				const sideSlots = [...entry.element.querySelectorAll<HTMLElement>('.screenshot_showcase_smallscreenshot.showcase_slot')];
 				sideSlots.slice(1).forEach((slot) => slot.remove());
 				entry.element.dataset.steamcanvasMosaic = 'true';
-				const baseName = files[0].name.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || 'steam-artwork';
+				const baseName = files[0].name.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || (entry.kind === 'screenshot' ? 'steam-screenshot' : 'steam-artwork');
 				if (mosaic.animated?.format === 'gif') {
 					try {
 						const gifPanels = await encodeAnimatedMosaic(files[0], mosaic.animated);
@@ -886,18 +940,18 @@ export default function ShowcaseEditor({ previewDocument }: ShowcaseEditorProps)
 				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Artwork title</span><input style={fieldStyle} aria-label={`Artwork title for ${entry.title}`} value={entry.artworkTitle.trim()} onChange={(event) => updateArtworkTitle(entry, event.target.value)} placeholder="Optional" /></label>
 				<label style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '11px', cursor: 'pointer' }}><input type="checkbox" checked={entry.artworkTitleHidden} onChange={(event) => toggleArtworkTitle(entry, event.target.checked)} />Hide item title</label>
 				</>}
-				{entry.kind !== 'other' && <label style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', minHeight: '34px', marginBottom: '9px', border: '1px solid #65727b', background: '#303c44', cursor: 'pointer' }}><ImagePlus size={14} />{entry.kind === 'workshop' ? 'Replace workshop image' : 'Replace artwork'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(event) => void updateArtwork(entry, event)} /></label>}
+				{entry.kind !== 'other' && <label style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', minHeight: '34px', marginBottom: '9px', border: '1px solid #65727b', background: '#303c44', cursor: 'pointer' }}><ImagePlus size={14} />{entry.kind === 'workshop' ? 'Replace workshop image' : entry.kind === 'screenshot' ? 'Replace screenshot image' : 'Replace artwork'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(event) => void updateArtwork(entry, event)} /></label>}
 				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
 				</div>}
 			</div>
-			{(entry.kind === 'artwork' || entry.kind === 'workshop') && ((entry.kind === 'workshop' && entry.exportFiles?.length === 5) || (entry.kind === 'artwork' && entry.exportFiles?.length === 2) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
+			{(hasTwoPanelImageEditor(entry.kind) || entry.kind === 'workshop') && ((entry.kind === 'workshop' && entry.exportFiles?.length === 5) || (hasTwoPanelImageEditor(entry.kind) && entry.exportFiles?.length === 2) || entry.animatedArtwork) && <button type="button" style={buttonStyle} title={entry.exportFiles ? 'Download image panels as ZIP' : 'Download original animation'} aria-label={`${entry.exportFiles ? 'Download ZIP' : 'Download original'} for ${entry.title}`} onClick={() => void downloadArtwork(entry)}><Download size={14} />{entry.exportFiles ? 'Download ZIP' : 'Download original'}</button>}
 		</div>, host, entry?.id || 'showcase-add-controls');
 	const renderAddControl = (host: HTMLElement) => createPortal(
 		<div style={{ position: 'relative' }}>
 			<button type="button" className="showcase-add-trigger" style={floatingAddButtonStyle} title="Add showcase" aria-label="Add showcase" onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}><Plus size={18} color="#ffffff" />Add showcase</button>
 			{addingOpen && <div style={addPopoverStyle} onClick={(event) => event.stopPropagation()}>
 				<div style={{ marginBottom: '10px', color: '#e9eef0', fontSize: '14px', fontWeight: 700 }}>Add a showcase</div>
-				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Showcase type</span><select style={fieldStyle} value={newShowcaseKind} onChange={(event) => setNewShowcaseKind(event.target.value as Exclude<ShowcaseKind, 'other'>)}><option value="artwork">Artwork</option><option value="featured-artwork">Featured artwork</option><option value="workshop">Workshop</option></select></label>
+				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Showcase type</span><select style={fieldStyle} value={newShowcaseKind} onChange={(event) => setNewShowcaseKind(event.target.value as CreatableShowcaseKind)}><option value="artwork">Artwork</option><option value="featured-artwork">Featured artwork</option><option value="screenshot">Screenshot</option><option value="workshop">Workshop</option></select></label>
 				<button type="button" style={{ ...buttonStyle, width: '100%', marginTop: '2px', background: '#52752a', borderColor: '#789c42', color: '#ffffff' }} onClick={addShowcase}><Plus size={14} color="#ffffff" />Add</button>
 				{error && <div role="alert" style={{ marginTop: '7px', color: '#ffb8ad' }}>{error}</div>}
 			</div>}
