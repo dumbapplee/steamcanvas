@@ -3,6 +3,7 @@ import { ArrowUpRight, CircleHelp, ExternalLink, LoaderCircle, PanelsTopLeft, Se
 import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './components/AvatarEditor';
 import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFramePicker';
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
+import ProfileThemePicker, { type AppliedProfileTheme } from './components/ProfileThemePicker';
 import ShowcaseEditor from './components/ShowcaseEditor';
 
 type ProfilePreview = {
@@ -21,6 +22,7 @@ export default function App() {
   const [avatarEdit, setAvatarEdit] = useState<AvatarEditState>(DEFAULT_AVATAR_EDIT);
   const [avatarFrame, setAvatarFrame] = useState<SteamAvatarFrame | null>(null);
   const [background, setBackground] = useState<SteamBackground | null>(null);
+  const [profileTheme, setProfileTheme] = useState<AppliedProfileTheme | null>(null);
   const [previewLevel, setPreviewLevel] = useState(0);
   const [sourceBackgroundImage, setSourceBackgroundImage] = useState('');
   const [sourceAvatarFrameImage, setSourceAvatarFrameImage] = useState('');
@@ -30,6 +32,14 @@ export default function App() {
   const sourceBackgroundStyle = useRef<string | null>(null);
   const sourceBackgroundVideo = useRef<HTMLElement | null>(null);
   const sourceAvatarFrame = useRef<HTMLElement | null>(null);
+  const sourceBodyClass = useRef('');
+  const sourceThemeVariables = useRef<Record<string, { value: string; priority: string }>>({});
+
+  const themeVariableNames = [
+    '--gradient-right', '--gradient-left', '--gradient-background', '--gradient-background-right',
+    '--gradient-background-left', '--color-showcase-header', '--gradient-showcase-header-left',
+    '--btn-background', '--btn-background-hover', '--btn-outline',
+  ];
 
   useEffect(() => {
     if (!profile || !previewLoaded) return;
@@ -101,6 +111,30 @@ export default function App() {
 
   useEffect(() => {
     if (!profile || !previewLoaded) return;
+    const body = previewFrame.current?.contentDocument?.body;
+    if (!body) return;
+
+    body.className = sourceBodyClass.current;
+    if (profileTheme?.themeClass) {
+      for (const className of [...body.classList]) {
+        if (className.endsWith('Theme')) body.classList.remove(className);
+      }
+      body.classList.add(profileTheme.themeClass);
+    }
+    for (const property of themeVariableNames) {
+      const value = profileTheme?.variables[property];
+      if (value) {
+        body.style.setProperty(property, value);
+        continue;
+      }
+      const original = sourceThemeVariables.current[property];
+      if (original?.value) body.style.setProperty(property, original.value, original.priority);
+      else body.style.removeProperty(property);
+    }
+  }, [profileTheme, previewLoaded, profile]);
+
+  useEffect(() => {
+    if (!profile || !previewLoaded) return;
 
     const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
     if (!page) return;
@@ -162,12 +196,15 @@ export default function App() {
     setAvatarEdit(DEFAULT_AVATAR_EDIT);
     setAvatarFrame(null);
     setBackground(null);
+    setProfileTheme(null);
     setPreviewLevel(0);
     setSourceBackgroundImage('');
     setSourceAvatarFrameImage('');
     sourceBackgroundStyle.current = null;
     sourceBackgroundVideo.current = null;
     sourceAvatarFrame.current = null;
+    sourceBodyClass.current = '';
+    sourceThemeVariables.current = {};
 
     try {
       const response = await fetch('/api/profile', {
@@ -249,6 +286,10 @@ export default function App() {
                 value={avatarFrame}
                 onChange={setAvatarFrame}
               />
+              <ProfileThemePicker
+                value={profileTheme}
+                onApply={setProfileTheme}
+              />
               <BackgroundPicker sourceBackgroundImage={sourceBackgroundImage} value={background} onChange={setBackground} />
             </>
           )}
@@ -278,6 +319,12 @@ export default function App() {
                   const animatedBackground = page?.querySelector<HTMLElement>('.profile_animated_background');
                   const avatarFrameElement = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.playerAvatarAutoSizeInner .profile_avatar_frame');
                   const avatarFrameImage = avatarFrameElement?.querySelector<HTMLImageElement>('img');
+                  const body = document?.body;
+                  sourceBodyClass.current = body?.className || '';
+                  sourceThemeVariables.current = Object.fromEntries(themeVariableNames.map((property) => [property, {
+                    value: body?.style.getPropertyValue(property) || '',
+                    priority: body?.style.getPropertyPriority(property) || '',
+                  }]));
                   sourceBackgroundStyle.current = page?.getAttribute('style') ?? null;
                   sourceBackgroundVideo.current = animatedBackground ? animatedBackground.cloneNode(true) as HTMLElement : null;
                   sourceAvatarFrame.current = avatarFrameElement ? avatarFrameElement.cloneNode(true) as HTMLElement : null;

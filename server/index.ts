@@ -30,6 +30,8 @@ type SteamPointShopDefinition = {
   defid?: number;
   active?: boolean;
   community_item_class?: number;
+  community_item_type?: number;
+  bundle_defids?: number[];
   community_item_data?: {
     item_name?: string;
     item_title?: string;
@@ -38,6 +40,7 @@ type SteamPointShopDefinition = {
     item_movie_webm?: string;
     item_movie_mp4?: string;
     animated?: boolean;
+    profile_theme_id?: string;
   };
 };
 
@@ -108,18 +111,27 @@ function encodeStringField(field: number, value: string): Buffer {
   return Buffer.concat([encodeVarint((field << 3) | 2), encodeVarint(bytes.length), bytes]);
 }
 
-function makePointsShopQuery(cursor?: string, communityItemClass = 3): string {
+function makePointsShopQuery(cursor?: string, communityItemClass = 3, pageSize = 20): string {
   const query = Buffer.concat([
     encodeNumberField(3, communityItemClass),
     encodeStringField(4, 'english'),
-    encodeNumberField(5, 20),
+    encodeNumberField(5, pageSize),
     ...(cursor ? [encodeStringField(6, cursor)] : []),
     encodeNumberField(7, 2),
     encodeNumberField(8, 0),
     encodeNumberField(9, 1),
-    ...(communityItemClass === 3 ? [encodeNumberField(12, 1)] : []),
+    ...(communityItemClass === 3 ? [encodeNumberField(12, 1)] : communityItemClass === 8 ? [encodeNumberField(12, 3)] : []),
     encodeNumberField(17, 3),
     encodeNumberField(17, 4),
+  ]);
+  return Buffer.concat([encodeVarint(10), encodeVarint(query.length), query]).toString('base64');
+}
+
+function makeRewardDefinitionsQuery(defids: number[]): string {
+  const query = Buffer.concat([
+    encodeStringField(4, 'english'),
+    ...defids.map((defid) => encodeNumberField(11, defid)),
+    encodeNumberField(16, 1),
   ]);
   return Buffer.concat([encodeVarint(10), encodeVarint(query.length), query]).toString('base64');
 }
@@ -296,6 +308,150 @@ app.get('/api/avatar-frames', async (request, response) => {
     response.json(payload);
   } catch {
     response.status(502).json({ error: 'Steam could not load avatar frames right now.' });
+  }
+});
+
+app.get('/api/profile-themes', async (request, response) => {
+  const cursor = typeof request.query.cursor === 'string' ? request.query.cursor : '';
+  if (cursor && (cursor.length > 128 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cursor))) {
+    response.status(400).json({ error: 'Invalid profile theme page cursor.' });
+    return;
+  }
+
+  const cacheKey = `profile-themes-v3:${cursor || 'first'}`;
+  try {
+    const payload = await getCachedCatalog(cacheKey, async () => {
+      const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
+      apiUrl.searchParams.set('origin', 'https://store.steampowered.com');
+      apiUrl.searchParams.set('input_protobuf_encoded', makePointsShopQuery(cursor || undefined, 8));
+      apiUrl.searchParams.set('format', 'json');
+
+      const result = await axios.get<SteamPointShopResponse>(apiUrl.href, {
+        timeout: 15000,
+        headers: { Accept: 'application/json' },
+      });
+      const pointShopResponse = result.data.response?.responses
+        ?.filter((entry) => entry.eresult === 1 && Array.isArray(entry.response?.definitions))
+        .map((entry) => entry.response!)
+        .sort((left, right) => (right.definitions?.length || 0) - (left.definitions?.length || 0))[0];
+      if (!pointShopResponse || !Array.isArray(pointShopResponse.definitions)) throw new Error('Steam returned an invalid profile theme catalog.');
+
+      const items = pointShopResponse.definitions.flatMap((definition) => {
+        const data = definition.community_item_data;
+        const appid = definition.appid;
+        const image = data?.item_image_large;
+        if (!definition.active || definition.community_item_class !== 8 || !data?.profile_theme_id || !appid || !definition.defid || !image || !definition.bundle_defids?.length) return [];
+
+        const assetBase = `https://shared.fastly.steamstatic.com/community_assets/images/items/${appid}/`;
+        return [{
+          id: `theme:${appid}:${definition.defid}`,
+          name: data.item_title || data.item_name || 'Profile theme',
+          game: String(appid),
+          appid,
+          communityItemType: definition.community_item_type,
+          profileThemeId: data.profile_theme_id,
+          bundleDefids: definition.bundle_defids,
+          imageUrl: `${assetBase}${image}`,
+          thumbnailUrl: `${assetBase}${data.item_image_small || image}`,
+        }];
+      });
+
+      return {
+        items,
+        totalCount: pointShopResponse.total_count || items.length,
+        pageSize: 20,
+        nextCursor: pointShopResponse.next_cursor || null,
+      };
+    });
+    setCatalogCacheHeaders(response);
+    response.json(payload);
+  } catch {
+    response.status(502).json({ error: 'Steam could not load profile themes right now.' });
+  }
+});
+
+app.get('/api/profile-theme-style', async (request, response) => {
+  const appid = Number(request.query.appid);
+  const itemType = Number(request.query.itemtype);
+  if (!Number.isSafeInteger(appid) || appid < 1 || appid > 0xffffffff || !Number.isSafeInteger(itemType) || itemType < 1 || itemType > 0xffffffff) {
+    response.status(400).json({ error: 'Invalid profile theme preview identifiers.' });
+    return;
+  }
+
+  const previewUrl = new URL('/profiles/76561197960266962', `https://${steamHost}`);
+  previewUrl.searchParams.set('previewprofile', '1');
+  previewUrl.searchParams.set('appid', String(appid));
+  previewUrl.searchParams.set('itemtype', String(itemType));
+  const cacheKey = `profile-theme-style:${appid}:${itemType}`;
+
+  try {
+    const payload = await getCachedCatalog(cacheKey, async () => {
+      const result = await axios.get<string>(previewUrl.href, {
+        timeout: 15000,
+        maxRedirects: 5,
+        responseType: 'text',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml',
+        },
+      });
+      const $ = load(result.data);
+      const themeRule = $('style').toArray()
+        .map((element) => $(element).text().match(/body\.GameProfileTheme\s*\{([^}]*)\}/s)?.[1])
+        .find(Boolean);
+      if (!themeRule) throw new Error('Steam did not return profile theme styles.');
+
+      const allowedProperties = new Set([
+        '--gradient-right', '--gradient-left', '--gradient-background', '--gradient-background-right',
+        '--gradient-background-left', '--color-showcase-header', '--gradient-showcase-header-left',
+        '--btn-background', '--btn-background-hover', '--btn-outline',
+      ]);
+      const variables: Record<string, string> = {};
+      for (const declaration of themeRule.matchAll(/(--[\w-]+)\s*:\s*([^;]+)\s*;?/g)) {
+        const [, property, rawValue] = declaration;
+        const value = rawValue.trim();
+        if (!allowedProperties.has(property)) continue;
+        if (/^(?:#[\da-f]{3,8}|rgba?\([\d.%\s,/]+\)|hsla?\([\d.%\s,/]+\)|transparent)$/i.test(value)) {
+          variables[property] = value;
+        }
+      }
+      if (!variables['--color-showcase-header'] || !variables['--gradient-background']) {
+        throw new Error('Steam returned incomplete profile theme styles.');
+      }
+      return { variables };
+    });
+    setCatalogCacheHeaders(response);
+    response.json(payload);
+  } catch {
+    response.status(502).json({ error: 'Steam could not load the selected profile theme right now.' });
+  }
+});
+
+app.get('/api/profile-theme-items', async (request, response) => {
+  const rawDefids = typeof request.query.defids === 'string' ? request.query.defids : '';
+  const defids = rawDefids.split(',').map((value) => Number(value));
+  if (!rawDefids || defids.length < 1 || defids.length > 8 || defids.some((defid) => !Number.isInteger(defid) || defid < 1 || defid > 0xffffffff)) {
+    response.status(400).json({ error: 'Invalid profile theme bundle item IDs.' });
+    return;
+  }
+
+  const uniqueDefids = [...new Set(defids)];
+  const cacheKey = `profile-theme-items:${uniqueDefids.slice().sort((a, b) => a - b).join(',')}`;
+  try {
+    const payload = await getCachedCatalog(cacheKey, async () => {
+      const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
+      apiUrl.searchParams.set('origin', 'https://store.steampowered.com');
+      apiUrl.searchParams.set('input_protobuf_encoded', makeRewardDefinitionsQuery(uniqueDefids));
+      apiUrl.searchParams.set('format', 'json');
+      const result = await axios.get<SteamPointShopResponse>(apiUrl.href, { timeout: 15000, headers: { Accept: 'application/json' } });
+      const definitions = result.data.response?.responses?.flatMap((entry) => entry.eresult === 1 ? entry.response?.definitions || [] : []) || [];
+      if (definitions.length !== uniqueDefids.length) throw new Error('Steam returned an incomplete profile theme bundle.');
+      return { items: definitions };
+    });
+    setCatalogCacheHeaders(response);
+    response.json(payload);
+  } catch {
+    response.status(502).json({ error: 'Steam could not load the profile theme bundle right now.' });
   }
 });
 

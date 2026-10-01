@@ -45,6 +45,10 @@ The selected market image is applied only to `.profile_page` inside the sandboxe
 
 Market background search pages are cached by search query, offset, and page size for three hours. Animated Points Shop backgrounds and avatar-frame catalog pages use the same three-hour server-side cache, keyed by their Steam pagination cursor. Concurrent identical requests share one upstream Steam request. Cache entries are held in process memory, expired entries are removed as new entries are stored, and the cache is capped at 500 entries; a server restart clears it. The public API responses also advertise the same three-hour browser cache lifetime. Profile HTML remains uncached (`no-store`) so its personalized content is fetched fresh.
 
+## Steam Points Shop game profiles
+
+The Game Profiles catalog comes from `ILoyaltyRewardsService/BatchedQueryRewardItems` filtered to community item class `8` and the official cluster filter (`protobuf field 12 = 3`). The Steam response is batched: the first subresponse is a single featured card, while the next contains the 20-card grid. The picker uses the larger grid response and keeps all class-8 bundles with a `profile_theme_id` (these IDs and `community_item_type` values vary across themes). Named theme IDs such as `PinkTeal`, `Ghost`, and `BlueRed` are applied through their matching body classes from Steam's profile stylesheet. Generic `GameProfile` bundles use the CSS variables extracted from Steam's preview HTML when Steam returns theme-specific values; if Steam only returns the profile's already-equipped values, the picker reports that no distinct preview was supplied rather than claiming the theme changed. The selected theme never changes the profile's avatar, avatar frame, or `.no_header.profile_page` background image. Reset restores the original body class and inline property values. Catalog and style responses are cached for three hours and do not equip or purchase the bundle.
+
 ## Avatar and frame extraction
 
 Avatar and frame are separate layers:
