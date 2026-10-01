@@ -24,6 +24,7 @@ type EditorSource = File | PublicScreenshot;
 type ShowcaseEditorProps = {
 	previewDocument: Document | null;
 	profileUrl: string;
+	addControlTarget: HTMLElement | null;
 };
 
 type ArtworkMosaic = {
@@ -573,7 +574,7 @@ function sourceName(source: EditorSource): string {
 	return isPublicScreenshot(source) ? `Screenshot ${source.id}` : source.name;
 }
 
-export default function ShowcaseEditor({ previewDocument, profileUrl }: ShowcaseEditorProps) {
+export default function ShowcaseEditor({ previewDocument, profileUrl, addControlTarget }: ShowcaseEditorProps) {
 	const [entries, setEntries] = useState<ShowcaseEntry[]>([]);
 	const [newShowcaseKind, setNewShowcaseKind] = useState<CreatableShowcaseKind>('artwork');
 	const [error, setError] = useState('');
@@ -612,33 +613,6 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 		return host;
 	}
 
-	function createFixedAddHost(document: Document): HTMLElement {
-		const host = document.createElement('div');
-		host.dataset.steamcanvasShowcaseControls = 'add-showcase';
-		host.style.cssText = 'position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:2147483000;display:block;pointer-events:auto;';
-		document.body.append(host);
-		return host;
-	}
-
-	function positionFixedAddHost(host: HTMLElement, stage: HTMLElement): void {
-		const view = stage.ownerDocument.defaultView;
-		if (!view) return;
-
-		const rect = stage.getBoundingClientRect();
-		const visibleTop = Math.max(0, rect.top);
-		const visibleBottom = Math.min(view.innerHeight, rect.bottom);
-		const visibleLeft = Math.max(0, rect.left);
-		const visibleRight = Math.min(view.innerWidth, rect.right);
-		if (visibleBottom - visibleTop < 60 || visibleRight <= visibleLeft) {
-			host.style.display = 'none';
-			return;
-		}
-
-		host.style.display = 'block';
-		host.style.left = `${(visibleLeft + visibleRight) / 2}px`;
-		host.style.top = `${visibleBottom - 56}px`;
-	}
-
 	useEffect(() => {
 		const area = getShowcaseArea(previewDocument, true);
 		if (!area) {
@@ -666,8 +640,12 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 				return { id, kind, title, element, host };
 			});
 		setEntries(nextEntries);
-		const previewStage = previewDocument!.defaultView?.frameElement?.closest<HTMLElement>('.preview-stage');
-		const addHost = previewStage ? createFixedAddHost(previewStage.ownerDocument) : null;
+		const addHost = addControlTarget?.ownerDocument.createElement('div') || null;
+		if (addHost && addControlTarget) {
+			addHost.dataset.steamcanvasShowcaseControls = 'add-showcase';
+			addHost.style.cssText = 'position:relative;z-index:5;display:block;pointer-events:auto;';
+			addControlTarget.append(addHost);
+		}
 		setAddControlHost(addHost);
 		setEditingId(null);
 		setAddingOpen(false);
@@ -681,24 +659,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 			dragStyle.remove();
 			addHost?.remove();
 		};
-	}, [previewDocument]);
-
-	useEffect(() => {
-		if (!addControlHost || !previewDocument) return;
-		const frameElement = previewDocument.defaultView?.frameElement;
-		const stage = frameElement?.closest<HTMLElement>('.preview-stage');
-		const view = stage?.ownerDocument.defaultView;
-		if (!stage || !view) return;
-
-		const updatePosition = () => positionFixedAddHost(addControlHost, stage);
-		updatePosition();
-		view.addEventListener('scroll', updatePosition, true);
-		view.addEventListener('resize', updatePosition);
-		return () => {
-			view.removeEventListener('scroll', updatePosition, true);
-			view.removeEventListener('resize', updatePosition);
-		};
-	}, [addControlHost, previewDocument]);
+	}, [addControlTarget, previewDocument]);
 
 	useEffect(() => {
 		if (!addingOpen || !addControlHost) return;
@@ -1331,11 +1292,11 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 		border: '1px solid #65727b', background: '#11191f', color: '#f2f4f3', font: '12px Arial,sans-serif',
 	};
 	const floatingAddButtonStyle: CSSProperties = {
-		minWidth: '154px', height: '44px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '9px', padding: '0 13px',
+		minWidth: '154px', height: '40px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '9px', padding: '0 13px',
 		cursor: 'pointer', font: '600 13px Arial,sans-serif', boxShadow: '0 4px 14px rgba(0,0,0,.42)',
 	};
 	const addPopoverStyle: CSSProperties = {
-		...popoverStyle, top: 'auto', bottom: '50px', left: '50%', right: 'auto', transform: 'translateX(-50%)',
+		...popoverStyle, top: 'auto', bottom: '50px', left: 0, right: 'auto', transform: 'none', width: 'min(280px, calc(100vw - 40px))',
 	};
 	const screenshotPreviewHeight = Math.max(1, Math.round(506 * (editorPreview[0]?.height || 284) / (editorPreview[0]?.width || 506)));
 	const previewPanelSize = (index: number) => activeEditor?.kind === 'screenshot'
@@ -1382,7 +1343,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl }: Showcase
 	};
 	const renderAddControl = (host: HTMLElement) => createPortal(
 		<div style={{ position: 'relative' }}>
-			<button type="button" className="showcase-add-trigger" style={floatingAddButtonStyle} title="Add showcase" aria-label="Add showcase" onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}><Plus size={18} color="#ffffff" />Add showcase</button>
+			<button type="button" className="showcase-add-trigger" style={{ ...floatingAddButtonStyle, width: '100%' }} title="Add showcase" aria-label="Add showcase" onClick={() => { setAddingOpen((open) => !open); setEditingId(null); }}><Plus size={18} color="#ffffff" />Add showcase</button>
 			{addingOpen && <div style={addPopoverStyle} onClick={(event) => event.stopPropagation()}>
 				<div style={{ marginBottom: '10px', color: '#e9eef0', fontSize: '14px', fontWeight: 700 }}>Add a showcase</div>
 				<label style={{ display: 'grid', gap: '5px', marginBottom: '10px' }}><span>Showcase type</span><select style={fieldStyle} value={newShowcaseKind} onChange={(event) => setNewShowcaseKind(event.target.value as CreatableShowcaseKind)}><option value="artwork">Artwork</option><option value="featured-artwork">Featured artwork</option><option value="screenshot">Screenshot</option><option value="workshop">Workshop</option></select></label>
