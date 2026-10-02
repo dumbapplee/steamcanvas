@@ -112,21 +112,30 @@ axios.interceptors.request.use(async (config) => {
   return config;
 });
 
-function retryDelayMs(error: unknown, attempt: number): number {
+type SteamRetryOptions = {
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  maxBackoffMs?: number;
+  maxRetryAfterMs?: number;
+};
+
+function retryDelayMs(error: unknown, attempt: number, options: SteamRetryOptions): number {
+  const maxRetryAfterMs = options.maxRetryAfterMs ?? 15000;
   if (axios.isAxiosError(error)) {
     const retryAfter = error.response?.headers?.['retry-after'];
     const retryAfterSeconds = Number(retryAfter);
-    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) return Math.min(15000, retryAfterSeconds * 1000);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) return Math.min(maxRetryAfterMs, retryAfterSeconds * 1000);
     if (typeof retryAfter === 'string') {
       const retryAt = Date.parse(retryAfter);
-      if (Number.isFinite(retryAt)) return Math.min(15000, Math.max(500, retryAt - Date.now()));
+      if (Number.isFinite(retryAt)) return Math.min(maxRetryAfterMs, Math.max(500, retryAt - Date.now()));
     }
   }
-  return Math.min(8000, 750 * 2 ** attempt);
+  return Math.min(options.maxBackoffMs ?? 8000, (options.baseDelayMs ?? 750) * 2 ** attempt);
 }
 
-async function getSteamHtmlWithRetry(url: string): Promise<{ data: string; responseUrl: string }> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+async function getSteamHtmlWithRetry(url: string, options: SteamRetryOptions = {}): Promise<{ data: string; responseUrl: string }> {
+  const maxAttempts = options.maxAttempts ?? 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const result = await axios.get<string>(url, {
         timeout: 15000,
@@ -141,8 +150,8 @@ async function getSteamHtmlWithRetry(url: string): Promise<{ data: string; respo
     } catch (error) {
       const status = axios.isAxiosError(error) ? error.response?.status : undefined;
       const retryable = status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500);
-      if (!retryable || attempt === 3) throw error;
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(error, attempt)));
+      if (!retryable || attempt === maxAttempts - 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(error, attempt, options)));
     }
   }
   throw new Error('Steam request failed after retries.');
@@ -663,7 +672,12 @@ app.post('/api/profile', async (request, response) => {
 
   try {
     const profile = await getCachedCatalog(`profile:${profileUrl.href}`, async () => {
-      const result = await getSteamHtmlWithRetry(profileUrl.href);
+      const result = await getSteamHtmlWithRetry(profileUrl.href, {
+        maxAttempts: 6,
+        baseDelayMs: 2000,
+        maxBackoffMs: 30000,
+        maxRetryAfterMs: 30000,
+      });
       return { ...makeInertDocument(result.data, result.responseUrl), url: result.responseUrl };
     }, profileCacheTtlMs);
     response.setHeader('Cache-Control', 'no-store');

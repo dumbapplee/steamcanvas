@@ -537,10 +537,7 @@ a { color: inherit; }
   .app-shell.has-profile .background-picker { margin-top: 14px; padding-top: 9px; }
   .app-shell.has-profile .background-current-row { gap: 9px; margin: 8px 0 0; }
   .app-shell.has-profile .background-current-preview { width: 80px; height: 48px; }
-  .app-shell.has-profile .background-search { height: 31px; margin-top: 7px; }
   .app-shell.has-profile .background-selection, .app-shell.has-profile .background-error { margin-top: 5px; }
-  .app-shell.has-profile .background-results { min-height: 64px; max-height: 110px; gap: 5px; margin-top: 6px; }
-  .app-shell.has-profile .background-picker-footer { margin-top: 4px; }
   .app-shell.has-profile .showcase-add-section { margin-top: 6px; padding-top: 5px; }
   .app-shell.has-profile .showcase-add-section > .source-label { font-size: 7px; }
   .app-shell.has-profile .showcase-add-slot { margin-top: 5px; }
@@ -567,9 +564,6 @@ a { color: inherit; }
   .app-shell.has-profile .background-picker { margin-top: 9px; padding-top: 6px; }
   .app-shell.has-profile .background-current-row { margin-top: 5px; }
   .app-shell.has-profile .background-current-preview { width: 68px; height: 40px; }
-  .app-shell.has-profile .background-search { height: 28px; margin-top: 5px; }
-  .app-shell.has-profile .background-results { min-height: 52px; max-height: 76px; gap: 4px; margin-top: 4px; }
-  .app-shell.has-profile .background-picker-footer { margin-top: 2px; font-size: 7px; }
   .app-shell.has-profile .showcase-add-section { margin-top: 4px; padding-top: 4px; }
   .app-shell.has-profile .showcase-add-section > .source-label { font-size: 7px; }
   .app-shell.has-profile .showcase-add-slot { margin-top: 3px; }
@@ -598,9 +592,6 @@ a { color: inherit; }
   .app-shell.has-profile .background-picker { margin-top: 7px; padding-top: 4px; }
   .app-shell.has-profile .background-current-row { margin-top: 4px; }
   .app-shell.has-profile .background-current-preview { width: 58px; height: 34px; }
-  .app-shell.has-profile .background-search { height: 26px; margin-top: 4px; }
-  .app-shell.has-profile .background-results { min-height: 40px; max-height: 50px; margin-top: 3px; }
-  .app-shell.has-profile .background-picker-footer { margin-top: 1px; }
   .app-shell.has-profile .showcase-add-section { margin-top: 3px; padding-top: 3px; }
   .app-shell.has-profile .showcase-add-section > .source-label { font-size: 7px; }
   .app-shell.has-profile .showcase-add-slot { margin-top: 2px; }
