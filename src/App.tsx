@@ -136,22 +136,6 @@ function isProjectDraft(value: unknown): value is ProjectDraft {
     && Number.isFinite(state.previewLevel);
 }
 
-function prepareBackgroundVideo(root: HTMLElement) {
-  root.style.pointerEvents = 'none';
-  root.querySelectorAll('video').forEach((video) => {
-    video.removeAttribute('controls');
-    video.controls = false;
-    video.setAttribute('controlslist', 'nodownload nofullscreen noremoteplayback noplaybackrate');
-    video.disablePictureInPicture = true;
-    video.defaultMuted = true;
-    video.muted = true;
-    video.loop = true;
-    video.autoplay = true;
-    video.playsInline = true;
-    void video.play().catch(() => {});
-  });
-}
-
 export default function App() {
   const [identifier, setIdentifier] = useState('');
   const [profile, setProfile] = useState<ProfilePreview | null>(null);
@@ -300,6 +284,10 @@ export default function App() {
         wrapper.dataset.steamcanvasBackgroundVideo = 'true';
 
         const video = page.ownerDocument.createElement('video');
+        video.autoplay = true;
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
         video.poster = background.videoPoster || background.imageUrl;
         video.setAttribute('aria-hidden', 'true');
 
@@ -318,14 +306,12 @@ export default function App() {
 
         wrapper.append(video);
         page.prepend(wrapper);
-        prepareBackgroundVideo(wrapper);
+        void video.play().catch(() => {});
       } else {
         page.style.setProperty('background-image', `url("${background.imageUrl}")`, 'important');
       }
     } else if (sourceBackgroundVideo.current) {
-      const clone = sourceBackgroundVideo.current.cloneNode(true) as HTMLElement;
-      page.prepend(clone);
-      prepareBackgroundVideo(clone);
+      page.prepend(sourceBackgroundVideo.current.cloneNode(true));
     }
   }, [background, previewLoaded, profile]);
 
@@ -646,7 +632,6 @@ export default function App() {
                   }
                   const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
                   const animatedBackground = page?.querySelector<HTMLElement>('.profile_animated_background');
-                  if (animatedBackground) prepareBackgroundVideo(animatedBackground);
                   const avatarFrameElement = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.playerAvatarAutoSizeInner .profile_avatar_frame');
                   const avatarFrameImage = avatarFrameElement?.querySelector<HTMLImageElement>('img');
                   const body = document?.body;
