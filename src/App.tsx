@@ -246,11 +246,11 @@ export default function App() {
     if (!body) return;
 
     body.className = sourceBodyClass.current;
-    if (profileTheme?.themeClass) {
+    if (profileTheme) {
       for (const className of [...body.classList]) {
         if (className.endsWith('Theme')) body.classList.remove(className);
       }
-      body.classList.add(profileTheme.themeClass);
+      if (profileTheme.themeClass) body.classList.add(profileTheme.themeClass);
     }
     for (const property of themeVariableNames) {
       const value = profileTheme?.variables[property];
