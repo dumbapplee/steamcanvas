@@ -62,7 +62,10 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 		setLoading(true);
 		setRetryAttempt(0);
 		setError('');
-		fetchWithRetry(url, { signal: controller.signal }, { onRetry: setRetryAttempt })
+		fetchWithRetry(url, { signal: controller.signal }, {
+			maxRetries: source === 'market' ? 0 : 3,
+			onRetry: setRetryAttempt,
+		})
 			.then(async (response) => {
 				const result = await response.json() as BackgroundResponse;
 				if (!response.ok) throw new Error(result.error || 'Could not load Steam backgrounds.');
@@ -200,7 +203,7 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 								{item.price && <span className="background-option-price">{item.price}</span>}
 							</button>
 						))}
-						{loading && <div className="background-loading"><span><LoaderCircle className="spin" size={24} />{retryAttempt > 0 && ` Retrying (${retryAttempt}/3)`}</span></div>}
+						{loading && <div className="background-loading"><span><LoaderCircle className="spin" size={24} />{source === 'market' ? ' Waiting for Steam...' : retryAttempt > 0 && ` Retrying (${retryAttempt}/3)`}</span></div>}
 						{!loading && !error && visibleItems.length === 0 && <p className="background-empty">No matching backgrounds.</p>}
 					</div>
 
