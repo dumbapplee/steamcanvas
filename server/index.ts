@@ -89,6 +89,28 @@ const catalogRequests = new Map<string, Promise<unknown>>();
 const catalogCacheTtlMs = 3 * 60 * 60 * 1000;
 const catalogCacheMaxEntries = 500;
 const profileCacheTtlMs = 10 * 60 * 1000;
+const steamRequestIntervalMs = 400;
+let steamRequestQueue: Promise<void> = Promise.resolve();
+let nextSteamRequestAt = 0;
+
+async function waitForSteamRequestSlot(): Promise<void> {
+  const previous = steamRequestQueue;
+  let releaseQueue!: () => void;
+  steamRequestQueue = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+  await previous;
+
+  const delayMs = Math.max(0, nextSteamRequestAt - Date.now());
+  if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+  nextSteamRequestAt = Date.now() + steamRequestIntervalMs;
+  releaseQueue();
+}
+
+axios.interceptors.request.use(async (config) => {
+  await waitForSteamRequestSlot();
+  return config;
+});
 
 function retryDelayMs(error: unknown, attempt: number): number {
   if (axios.isAxiosError(error)) {
