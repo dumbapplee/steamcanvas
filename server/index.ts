@@ -89,7 +89,7 @@ const catalogRequests = new Map<string, Promise<unknown>>();
 const catalogCacheTtlMs = 3 * 60 * 60 * 1000;
 const catalogCacheMaxEntries = 500;
 const profileCacheTtlMs = 10 * 60 * 1000;
-const steamRequestIntervalMs = 500;
+const steamRequestIntervalMs = 700;
 let steamRequestQueue: Promise<void> = Promise.resolve();
 let nextSteamRequestAt = 0;
 
@@ -133,20 +133,11 @@ function retryDelayMs(error: unknown, attempt: number, options: SteamRetryOption
   return Math.min(options.maxBackoffMs ?? 8000, (options.baseDelayMs ?? 750) * 2 ** attempt);
 }
 
-async function getSteamHtmlWithRetry(url: string, options: SteamRetryOptions = {}): Promise<{ data: string; responseUrl: string }> {
+async function retrySteamRequest<T>(request: () => Promise<T>, options: SteamRetryOptions = {}): Promise<T> {
   const maxAttempts = options.maxAttempts ?? 4;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      const result = await axios.get<string>(url, {
-        timeout: 15000,
-        maxRedirects: 5,
-        responseType: 'text',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml',
-        },
-      });
-      return { data: result.data, responseUrl: result.request?.res?.responseUrl || url };
+      return await request();
     } catch (error) {
       const status = axios.isAxiosError(error) ? error.response?.status : undefined;
       const retryable = status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500);
@@ -155,6 +146,19 @@ async function getSteamHtmlWithRetry(url: string, options: SteamRetryOptions = {
     }
   }
   throw new Error('Steam request failed after retries.');
+}
+
+async function getSteamHtmlWithRetry(url: string, options: SteamRetryOptions = {}): Promise<{ data: string; responseUrl: string }> {
+  const result = await retrySteamRequest(() => axios.get<string>(url, {
+    timeout: 15000,
+    maxRedirects: 5,
+    responseType: 'text',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml',
+    },
+  }), options);
+  return { data: result.data, responseUrl: result.request?.res?.responseUrl || url };
 }
 
 async function getCachedCatalog<T>(key: string, loadCatalog: () => Promise<T>, ttlMs = catalogCacheTtlMs): Promise<T> {
@@ -258,7 +262,7 @@ app.get('/api/backgrounds', async (request, response) => {
     const pages = await Promise.all(Array.from({ length: Math.ceil(count / 10) }, (_, index) => {
       const pageUrl = new URL(marketUrl);
       pageUrl.searchParams.set('start', String(start + index * 10));
-      return axios.get<SteamMarketResponse>(pageUrl.href, {
+      return retrySteamRequest(() => axios.get<SteamMarketResponse>(pageUrl.href, {
         timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
@@ -268,6 +272,11 @@ app.get('/api/backgrounds', async (request, response) => {
           Origin: 'https://steamcommunity.com',
           'X-Requested-With': 'XMLHttpRequest',
         },
+      }), {
+        maxAttempts: 6,
+        baseDelayMs: 2000,
+        maxBackoffMs: 30000,
+        maxRetryAfterMs: 60000,
       });
     }));
     if (pages.some(({ data }) => !data.success || !Array.isArray(data.results))) throw new Error('Steam returned an invalid background catalog.');
@@ -294,7 +303,7 @@ app.get('/api/backgrounds', async (request, response) => {
     response.json(payload);
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 429) {
-      response.status(503).json({ error: 'Steam is temporarily limiting Market requests. Please try again in a few seconds.' });
+      response.status(503).json({ error: 'Steam is temporarily limiting Market requests. Please try again later.' });
       return;
     }
     response.status(502).json({ error: 'Steam could not load profile backgrounds right now.' });
