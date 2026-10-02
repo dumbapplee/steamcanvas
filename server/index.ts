@@ -663,17 +663,8 @@ app.post('/api/profile', async (request, response) => {
 
   try {
     const profile = await getCachedCatalog(`profile:${profileUrl.href}`, async () => {
-      const result = await axios.get<string>(profileUrl.href, {
-        timeout: 15000,
-        maxRedirects: 5,
-        responseType: 'text',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml',
-        },
-      });
-      const resolvedUrl = result.request?.res?.responseUrl || profileUrl.href;
-      return { ...makeInertDocument(result.data, resolvedUrl), url: resolvedUrl };
+      const result = await getSteamHtmlWithRetry(profileUrl.href);
+      return { ...makeInertDocument(result.data, result.responseUrl), url: result.responseUrl };
     }, profileCacheTtlMs);
     response.setHeader('Cache-Control', 'no-store');
     response.json(profile);
