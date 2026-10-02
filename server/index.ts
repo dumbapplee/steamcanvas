@@ -89,7 +89,7 @@ const catalogRequests = new Map<string, Promise<unknown>>();
 const catalogCacheTtlMs = 3 * 60 * 60 * 1000;
 const catalogCacheMaxEntries = 500;
 const profileCacheTtlMs = 10 * 60 * 1000;
-const steamRequestIntervalMs = 400;
+const steamRequestIntervalMs = 500;
 let steamRequestQueue: Promise<void> = Promise.resolve();
 let nextSteamRequestAt = 0;
 
