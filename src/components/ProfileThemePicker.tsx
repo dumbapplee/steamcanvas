@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, ChevronLeft, ChevronRight, ExternalLink, LoaderCircle, Palette, RotateCcw, Search, X } from 'lucide-react';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
 
