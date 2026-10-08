@@ -63,6 +63,7 @@ type SteamPointShopResponse = {
       eresult?: number;
       response?: {
         total_count?: number;
+        count?: number;
         next_cursor?: string;
         definitions?: SteamPointShopDefinition[];
       };
@@ -278,6 +279,12 @@ async function fetchPointShopPage(category: CatalogCategory, cursor?: string): P
       : validResponses[0]?.response;
     const definitions = pointShopResponse?.definitions;
     if (!pointShopResponse || !Array.isArray(definitions)) {
+      const terminalPage = cursor
+        ? responses.find((entry) => entry.eresult === 1 && entry.response?.count === 0 && entry.response.next_cursor === cursor)?.response
+        : undefined;
+      if (terminalPage) {
+        return { pointShopResponse: { ...terminalPage, definitions: [], next_cursor: undefined } };
+      }
       const resultCodes = responses.map((entry) => entry.eresult ?? 'missing').join(', ') || 'no response entries';
       const responseShape = JSON.stringify({
         topLevelKeys: Object.keys(result.data || {}),
