@@ -45,6 +45,7 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const pointShopCursors = useRef<Array<string | null>>([null]);
 	const pointShopIndexedRef = useRef(false);
+	const requestSequence = useRef(0);
 	const pageSize = source === 'market' ? 30 : 20;
 
 	useEffect(() => {
@@ -58,6 +59,7 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 		if (!expanded) return;
 
 		const controller = new AbortController();
+		const requestId = ++requestSequence.current;
 		let url: string;
 		if (source === 'market') {
 			url = `/api/backgrounds?${new URLSearchParams({ query: submittedQuery, start: String(page * pageSize), count: String(pageSize) })}`;
@@ -82,7 +84,8 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 				return result;
 			})
 			.then((result) => {
-				setItems(result.items);
+				if (controller.signal.aborted || requestSequence.current !== requestId) return;
+				setItems([...new Map(result.items.map((item) => [item.id, item])).values()]);
 				setTotalCount(result.totalCount);
 				if (source === 'points') {
 					pointShopIndexedRef.current = Boolean(result.catalogIndexed);
@@ -91,6 +94,7 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 				}
 			})
 			.catch((caught: unknown) => {
+				if (controller.signal.aborted || requestSequence.current !== requestId) return;
 				if (caught instanceof DOMException && caught.name === 'AbortError') return;
 				setError(caught instanceof Error ? caught.message : 'Could not load Steam backgrounds.');
 				setItems([]);
@@ -109,6 +113,8 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 	function changeSource(nextSource: 'market' | 'points') {
 		setSource(nextSource);
 		setPage(0);
+		setItems([]);
+		setTotalCount(0);
 		setQuery('');
 		setSubmittedQuery('');
 		pointShopIndexedRef.current = false;
@@ -119,6 +125,8 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 	function searchBackgrounds(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		setPage(0);
+		setItems([]);
+		setTotalCount(0);
 		pointShopIndexedRef.current = false;
 		setPointShopIndexed(false);
 		pointShopCursors.current = [null];

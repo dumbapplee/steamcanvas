@@ -158,7 +158,8 @@ async function retrySteamRequest<T>(request: () => Promise<T>, options: SteamRet
       return await request();
     } catch (error) {
       const status = axios.isAxiosError(error) ? error.response?.status : undefined;
-      const retryable = status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500);
+      const networkError = axios.isAxiosError(error) && !error.response;
+      const retryable = networkError || status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500);
       if (!retryable || attempt === maxAttempts - 1) throw error;
       await new Promise((resolve) => setTimeout(resolve, retryDelayMs(error, attempt, options)));
     }
@@ -262,9 +263,14 @@ async function fetchPointShopPage(category: CatalogCategory, cursor?: string): P
   apiUrl.searchParams.set('input_protobuf_encoded', makePointsShopQuery(cursor, categoryConfig.communityItemClass));
   apiUrl.searchParams.set('format', 'json');
 
-  const result = await axios.get<SteamPointShopResponse>(apiUrl.href, {
+  const result = await retrySteamRequest(() => axios.get<SteamPointShopResponse>(apiUrl.href, {
     timeout: 15000,
     headers: { Accept: 'application/json' },
+  }), {
+    maxAttempts: 6,
+    baseDelayMs: 2000,
+    maxBackoffMs: 30000,
+    maxRetryAfterMs: 60000,
   });
   const responses = result.data.response?.responses?.filter((entry) => entry.eresult === 1 && Array.isArray(entry.response?.definitions)) || [];
   const pointShopResponse = category === 'profile-themes'
@@ -353,8 +359,12 @@ async function ensureCatalogDatabase(): Promise<void> {
           cursor TEXT,
           run_id UUID,
           complete BOOLEAN NOT NULL DEFAULT FALSE,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          last_completed_at TIMESTAMPTZ,
+          last_error TEXT
         );
+        ALTER TABLE points_catalog_sync ADD COLUMN IF NOT EXISTS last_completed_at TIMESTAMPTZ;
+        ALTER TABLE points_catalog_sync ADD COLUMN IF NOT EXISTS last_error TEXT;
       `);
     })().catch((error) => {
       catalogDbReady = null;
@@ -382,6 +392,84 @@ async function searchIndexedCatalog(category: CatalogCategory, query: string, pa
 }
 
 let catalogSyncRunning = false;
+let catalogRetryTimer: ReturnType<typeof setTimeout> | null = null;
+const catalogSyncIntervalMs = 24 * 60 * 60 * 1000;
+const catalogSyncContinueMs = 3000;
+const catalogSyncRetryMs = 5 * 60 * 1000;
+
+function scheduleCatalogSync(delayMs: number): void {
+  if (catalogRetryTimer) clearTimeout(catalogRetryTimer);
+  catalogRetryTimer = setTimeout(() => {
+    catalogRetryTimer = null;
+    void syncPointsCatalog();
+  }, delayMs);
+  catalogRetryTimer.unref();
+}
+
+async function syncCatalogCategory(category: CatalogCategory): Promise<boolean> {
+  const stateResult = await catalogPool!.query<{
+    cursor: string | null;
+    run_id: string | null;
+    complete: boolean;
+    fresh: boolean;
+  }>(
+    `SELECT cursor, run_id, complete,
+      last_completed_at > NOW() - INTERVAL '24 hours' AS fresh
+     FROM points_catalog_sync WHERE category = $1`,
+    [category],
+  );
+  const current = stateResult.rows[0];
+  if (current?.complete && current.fresh && !current.run_id) return false;
+
+  const runId = current?.run_id || randomUUID();
+  const cursor = current?.run_id ? current.cursor || undefined : undefined;
+  if (!current?.run_id) {
+    await catalogPool!.query(
+      `INSERT INTO points_catalog_sync (category, cursor, run_id, complete)
+       VALUES ($1, NULL, $2, FALSE)
+       ON CONFLICT (category) DO UPDATE
+       SET cursor = NULL, run_id = $2, updated_at = NOW(), last_error = NULL`,
+      [category, runId],
+    );
+  }
+
+  const page = await fetchPointShopPage(category, cursor);
+  if (cursor && page.nextCursor === cursor) {
+    throw new Error(`Steam repeated the pagination cursor for ${category}.`);
+  }
+
+  const client = await catalogPool!.connect();
+  try {
+    await client.query('BEGIN');
+    for (const item of page.items) {
+      await client.query(
+        'INSERT INTO points_catalog_items (category, id, name, game, payload, last_seen_run) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (category, id) DO UPDATE SET name = EXCLUDED.name, game = EXCLUDED.game, payload = EXCLUDED.payload, last_seen_run = EXCLUDED.last_seen_run',
+        [category, item.id, item.name, item.game, JSON.stringify(item), runId],
+      );
+    }
+    await client.query(
+      'UPDATE points_catalog_sync SET cursor = $2, run_id = $3, updated_at = NOW(), last_error = NULL WHERE category = $1',
+      [category, page.nextCursor, runId],
+    );
+    if (!page.nextCursor) {
+      await client.query('DELETE FROM points_catalog_items WHERE category = $1 AND last_seen_run <> $2', [category, runId]);
+      await client.query(
+        'UPDATE points_catalog_sync SET cursor = NULL, run_id = NULL, complete = TRUE, updated_at = NOW(), last_completed_at = NOW(), last_error = NULL WHERE category = $1',
+        [category],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  console.log(`Points Shop sync ${category}: saved ${page.items.length} items${page.nextCursor ? '; more pages remain.' : '; category complete.'}`);
+  return Boolean(page.nextCursor);
+}
+
 async function syncPointsCatalog(): Promise<void> {
   if (!catalogPool || catalogSyncRunning) return;
   catalogSyncRunning = true;
@@ -390,57 +478,34 @@ async function syncPointsCatalog(): Promise<void> {
     await ensureCatalogDatabase();
     lockClient = await catalogPool.connect();
     const lockResult = await lockClient.query<{ locked: boolean }>('SELECT pg_try_advisory_lock(741902318) AS locked');
-    if (!lockResult.rows[0]?.locked) return;
-
-    for (const { key: category } of catalogCategories) {
-      const stateResult = await lockClient.query<{ cursor: string | null; run_id: string | null }>(
-        'SELECT cursor, run_id FROM points_catalog_sync WHERE category = $1', [category],
-      );
-      const current = stateResult.rows[0];
-      const runId = current?.run_id || randomUUID();
-      let cursor = current?.run_id ? current.cursor || undefined : undefined;
-      if (!current?.run_id) {
-        await lockClient.query(
-          'INSERT INTO points_catalog_sync (category, cursor, run_id, complete) VALUES ($1, NULL, $2, FALSE) ON CONFLICT (category) DO UPDATE SET cursor = NULL, run_id = $2, updated_at = NOW()',
-          [category, runId],
-        );
-      }
-
-      do {
-        const page = await fetchPointShopPage(category, cursor);
-        const client = await catalogPool.connect();
-        try {
-          await client.query('BEGIN');
-          for (const item of page.items) {
-            await client.query(
-              'INSERT INTO points_catalog_items (category, id, name, game, payload, last_seen_run) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (category, id) DO UPDATE SET name = EXCLUDED.name, game = EXCLUDED.game, payload = EXCLUDED.payload, last_seen_run = EXCLUDED.last_seen_run',
-              [category, item.id, item.name, item.game, JSON.stringify(item), runId],
-            );
-          }
-          await client.query(
-            'UPDATE points_catalog_sync SET cursor = $2, run_id = $3, updated_at = NOW() WHERE category = $1',
-            [category, page.nextCursor, runId],
-          );
-          if (!page.nextCursor) {
-            await client.query('DELETE FROM points_catalog_items WHERE category = $1 AND last_seen_run <> $2', [category, runId]);
-            await client.query(
-              'UPDATE points_catalog_sync SET cursor = NULL, run_id = NULL, complete = TRUE, updated_at = NOW() WHERE category = $1',
-              [category],
-            );
-          }
-          await client.query('COMMIT');
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
-        } finally {
-          client.release();
-        }
-        cursor = page.nextCursor || undefined;
-      } while (cursor);
+    if (!lockResult.rows[0]?.locked) {
+      scheduleCatalogSync(30_000);
+      return;
     }
-    console.log('Points Shop catalog sync completed.');
+
+    let needsMorePages = false;
+    let failedCategory = false;
+    for (const { key: category } of catalogCategories) {
+      try {
+        needsMorePages = await syncCatalogCategory(category) || needsMorePages;
+      } catch (error) {
+        failedCategory = true;
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`Points Shop sync failed for ${category}; checkpoint preserved.`, error);
+        await catalogPool.query(
+          'UPDATE points_catalog_sync SET last_error = $2, updated_at = NOW() WHERE category = $1',
+          [category, message.slice(0, 500)],
+        ).catch((databaseError: unknown) => {
+          console.error(`Could not record sync error for ${category}.`, databaseError);
+        });
+      }
+    }
+
+    if (failedCategory) scheduleCatalogSync(catalogSyncRetryMs);
+    else scheduleCatalogSync(needsMorePages ? catalogSyncContinueMs : catalogSyncIntervalMs);
   } catch (error) {
     console.error('Points Shop catalog sync paused; it will resume on the next run.', error);
+    scheduleCatalogSync(catalogSyncRetryMs);
   } finally {
     if (lockClient) {
       try { await lockClient.query('SELECT pg_advisory_unlock(741902318)'); } catch { /* connection may already be closed */ }
@@ -449,6 +514,30 @@ async function syncPointsCatalog(): Promise<void> {
     catalogSyncRunning = false;
   }
 }
+
+app.get('/api/catalog-status', async (_request, response) => {
+  if (!catalogPool) {
+    response.status(503).json({ configured: false, error: 'DATABASE_URL is not configured.' });
+    return;
+  }
+  try {
+    await ensureCatalogDatabase();
+    const result = await catalogPool.query(`
+      SELECT sync.category, sync.complete, sync.run_id IS NOT NULL AS in_progress,
+        sync.updated_at, sync.last_completed_at, sync.last_error,
+        COUNT(items.id)::text AS item_count
+      FROM points_catalog_sync AS sync
+      LEFT JOIN points_catalog_items AS items ON items.category = sync.category
+      GROUP BY sync.category, sync.complete, sync.run_id, sync.updated_at, sync.last_completed_at, sync.last_error
+      ORDER BY sync.category
+    `);
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ configured: true, categories: result.rows });
+  } catch (error) {
+    console.error('Could not read Points Shop catalog status.', error);
+    response.status(503).json({ configured: true, error: 'Could not read catalog status.' });
+  }
+});
 
 async function respondWithIndexedSearch(category: CatalogCategory, request: express.Request, response: express.Response): Promise<boolean> {
   const query = typeof request.query.query === 'string' ? request.query.query.trim().slice(0, 80) : '';
@@ -532,8 +621,9 @@ app.get('/api/backgrounds', async (request, response) => {
         steamUrl: new URL(`/market/listings/753/${encodeURIComponent(hashName)}`, `https://${steamHost}`).href,
       }];
     });
+    const uniqueItems = [...new Map(items.map((item) => [item.id, item])).values()];
 
-      return { items, totalCount: pages[0].data.total_count || 0, pageSize: count };
+      return { items: uniqueItems, totalCount: pages[0].data.total_count || 0, pageSize: count };
     });
     setCatalogCacheHeaders(response);
     response.json(payload);
@@ -1009,8 +1099,6 @@ app.listen(port, '0.0.0.0', () => {
   if (catalogPool) {
     const initialSync = setTimeout(() => void syncPointsCatalog(), 5000);
     initialSync.unref();
-    const dailySync = setInterval(() => void syncPointsCatalog(), 24 * 60 * 60 * 1000);
-    dailySync.unref();
   } else {
     console.log('DATABASE_URL is not configured; Points Shop search will use the Steam fallback.');
   }
