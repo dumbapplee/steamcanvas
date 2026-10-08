@@ -76,6 +76,8 @@ type PointShopPage = {
   nextCursor: string | null;
 };
 
+class InvalidSteamPointShopResponseError extends Error {}
+
 type PublicScreenshot = {
   id: string;
   imageUrl: string;
@@ -135,6 +137,7 @@ type SteamRetryOptions = {
   baseDelayMs?: number;
   maxBackoffMs?: number;
   maxRetryAfterMs?: number;
+  isRetryable?: (error: unknown) => boolean;
 };
 
 function retryDelayMs(error: unknown, attempt: number, options: SteamRetryOptions): number {
@@ -159,7 +162,7 @@ async function retrySteamRequest<T>(request: () => Promise<T>, options: SteamRet
     } catch (error) {
       const status = axios.isAxiosError(error) ? error.response?.status : undefined;
       const networkError = axios.isAxiosError(error) && !error.response;
-      const retryable = networkError || status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500);
+      const retryable = options.isRetryable?.(error) === true || networkError || status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500);
       if (!retryable || attempt === maxAttempts - 1) throw error;
       await new Promise((resolve) => setTimeout(resolve, retryDelayMs(error, attempt, options)));
     }
@@ -263,20 +266,29 @@ async function fetchPointShopPage(category: CatalogCategory, cursor?: string): P
   apiUrl.searchParams.set('input_protobuf_encoded', makePointsShopQuery(cursor, categoryConfig.communityItemClass));
   apiUrl.searchParams.set('format', 'json');
 
-  const result = await retrySteamRequest(() => axios.get<SteamPointShopResponse>(apiUrl.href, {
-    timeout: 15000,
-    headers: { Accept: 'application/json' },
-  }), {
+  const { pointShopResponse } = await retrySteamRequest(async () => {
+    const result = await axios.get<SteamPointShopResponse>(apiUrl.href, {
+      timeout: 15000,
+      headers: { Accept: 'application/json' },
+    });
+    const responses = result.data.response?.responses || [];
+    const validResponses = responses.filter((entry) => entry.eresult === 1 && Array.isArray(entry.response?.definitions));
+    const pointShopResponse = category === 'profile-themes'
+      ? validResponses.map((entry) => entry.response!).sort((left, right) => (right.definitions?.length || 0) - (left.definitions?.length || 0))[0]
+      : validResponses[0]?.response;
+    const definitions = pointShopResponse?.definitions;
+    if (!pointShopResponse || !Array.isArray(definitions)) {
+      const resultCodes = responses.map((entry) => entry.eresult ?? 'missing').join(', ') || 'no response entries';
+      throw new InvalidSteamPointShopResponseError(`Steam returned an invalid ${category} catalog (eresult: ${resultCodes}).`);
+    }
+    return { pointShopResponse: { ...pointShopResponse, definitions } };
+  }, {
     maxAttempts: 6,
     baseDelayMs: 2000,
     maxBackoffMs: 30000,
     maxRetryAfterMs: 60000,
+    isRetryable: (error) => error instanceof InvalidSteamPointShopResponseError,
   });
-  const responses = result.data.response?.responses?.filter((entry) => entry.eresult === 1 && Array.isArray(entry.response?.definitions)) || [];
-  const pointShopResponse = category === 'profile-themes'
-    ? responses.map((entry) => entry.response!).sort((left, right) => (right.definitions?.length || 0) - (left.definitions?.length || 0))[0]
-    : responses[0]?.response;
-  if (!pointShopResponse || !Array.isArray(pointShopResponse.definitions)) throw new Error(`Steam returned an invalid ${category} catalog.`);
 
   const items = pointShopResponse.definitions.flatMap((definition): CatalogItem[] => {
     const data = definition.community_item_data;
