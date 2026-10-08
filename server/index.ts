@@ -170,9 +170,7 @@ async function getCachedCatalog<T>(key: string, loadCatalog: () => Promise<T>, t
 
   const request = Promise.resolve().then(loadCatalog).then((payload) => {
     const now = Date.now();
-    for (const [cacheKey, entry] of catalogCache) {
-      if (entry.expiresAt <= now) catalogCache.delete(cacheKey);
-    }
+    catalogCache.delete(key);
     while (catalogCache.size >= catalogCacheMaxEntries) {
       const oldestKey = catalogCache.keys().next().value;
       if (oldestKey === undefined) break;
@@ -180,6 +178,10 @@ async function getCachedCatalog<T>(key: string, loadCatalog: () => Promise<T>, t
     }
     catalogCache.set(key, { expiresAt: now + ttlMs, payload });
     return payload;
+  }).catch((error) => {
+    // Serve the last known catalog if Steam is rate-limiting or unavailable.
+    if (cached) return cached.payload as T;
+    throw error;
   }).finally(() => {
     catalogRequests.delete(key);
   });
@@ -259,10 +261,11 @@ app.get('/api/backgrounds', async (request, response) => {
   marketUrl.searchParams.append('category_753_item_class[]', 'tag_item_class_3');
   marketUrl.searchParams.set('norender', '1');
 
-    const pages = await Promise.all(Array.from({ length: Math.ceil(count / 10) }, (_, index) => {
+    const pages: Awaited<ReturnType<typeof axios.get<SteamMarketResponse>>>[] = [];
+    for (let index = 0; index < Math.ceil(count / 10); index++) {
       const pageUrl = new URL(marketUrl);
       pageUrl.searchParams.set('start', String(start + index * 10));
-      return retrySteamRequest(() => axios.get<SteamMarketResponse>(pageUrl.href, {
+      pages.push(await retrySteamRequest(() => axios.get<SteamMarketResponse>(pageUrl.href, {
         timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
@@ -277,8 +280,8 @@ app.get('/api/backgrounds', async (request, response) => {
         baseDelayMs: 2000,
         maxBackoffMs: 30000,
         maxRetryAfterMs: 60000,
-      });
-    }));
+      }));
+    }
     if (pages.some(({ data }) => !data.success || !Array.isArray(data.results))) throw new Error('Steam returned an invalid background catalog.');
 
     const items = pages.flatMap(({ data }) => data.results || []).flatMap((item) => {
