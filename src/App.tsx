@@ -267,7 +267,14 @@ export default function App() {
   useEffect(() => {
     if (!profile || !previewLoaded) return;
 
-    const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
+    const document = previewFrame.current?.contentDocument;
+    if (!document) return;
+    document.querySelectorAll('video').forEach((video) => {
+      video.controls = false;
+      video.removeAttribute('controls');
+    });
+
+    const page = document.querySelector<HTMLElement>('.no_header.profile_page');
     if (!page) return;
     page.querySelectorAll('.profile_animated_background').forEach((element) => element.remove());
     if (sourceBackgroundStyle.current !== null) {
@@ -287,6 +294,7 @@ export default function App() {
         video.autoplay = true;
         video.loop = true;
         video.muted = true;
+        video.controls = false;
         video.playsInline = true;
         video.poster = background.videoPoster || background.imageUrl;
         video.setAttribute('aria-hidden', 'true');
@@ -311,7 +319,17 @@ export default function App() {
         page.style.setProperty('background-image', `url("${background.imageUrl}")`, 'important');
       }
     } else if (sourceBackgroundVideo.current) {
-      page.prepend(sourceBackgroundVideo.current.cloneNode(true));
+      const originalBackground = sourceBackgroundVideo.current.cloneNode(true) as HTMLElement;
+      originalBackground.querySelectorAll('video').forEach((video) => {
+        video.autoplay = true;
+        video.loop = true;
+        video.muted = true;
+        video.controls = false;
+        video.removeAttribute('controls');
+        video.playsInline = true;
+        void video.play().catch(() => {});
+      });
+      page.prepend(originalBackground);
     }
   }, [background, previewLoaded, profile]);
 
@@ -629,6 +647,12 @@ export default function App() {
                   if (document && restoredDraft) {
                     restoreShowcaseArea(document, restoredDraft.showcaseAreaHtml);
                     pendingDraft.current = null;
+                  }
+                  if (document && !document.querySelector('#steamcanvas-hide-video-controls')) {
+                    const style = document.createElement('style');
+                    style.id = 'steamcanvas-hide-video-controls';
+                    style.textContent = 'video::-webkit-media-controls,video::-webkit-media-controls-enclosure{display:none!important}';
+                    document.head.append(style);
                   }
                   const page = previewFrame.current?.contentDocument?.querySelector<HTMLElement>('.no_header.profile_page');
                   const animatedBackground = page?.querySelector<HTMLElement>('.profile_animated_background');
