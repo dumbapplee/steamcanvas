@@ -279,7 +279,16 @@ async function fetchPointShopPage(category: CatalogCategory, cursor?: string): P
     const definitions = pointShopResponse?.definitions;
     if (!pointShopResponse || !Array.isArray(definitions)) {
       const resultCodes = responses.map((entry) => entry.eresult ?? 'missing').join(', ') || 'no response entries';
-      throw new InvalidSteamPointShopResponseError(`Steam returned an invalid ${category} catalog (eresult: ${resultCodes}).`);
+      const responseShape = JSON.stringify({
+        topLevelKeys: Object.keys(result.data || {}),
+        responseKeys: Object.keys(result.data.response || {}),
+        entries: responses.slice(0, 2).map((entry) => ({
+          eresult: entry.eresult,
+          responseKeys: Object.keys(entry.response || {}),
+          responsePreview: JSON.stringify(entry.response).slice(0, 500),
+        })),
+      });
+      throw new InvalidSteamPointShopResponseError(`Steam returned an invalid ${category} catalog (eresult: ${resultCodes}; response: ${responseShape}).`);
     }
     return { pointShopResponse: { ...pointShopResponse, definitions } };
   }, {
