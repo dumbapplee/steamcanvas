@@ -18,6 +18,7 @@ type AvatarFrameResponse = {
 	totalCount: number;
 	pageSize: number;
 	nextCursor?: string | null;
+	catalogIndexed?: boolean;
 	error?: string;
 };
 
@@ -38,8 +39,10 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 	const [retryAttempt, setRetryAttempt] = useState(0);
 	const [error, setError] = useState('');
 	const [expanded, setExpanded] = useState(false);
+	const [catalogIndexed, setCatalogIndexed] = useState(false);
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const cursors = useRef<Array<string | null>>([null]);
+	const catalogIndexedRef = useRef(false);
 	const pageSize = 20;
 
 	useEffect(() => {
@@ -54,7 +57,11 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 
 		const controller = new AbortController();
 		const cursor = cursors.current[page];
-		const url = cursor ? `/api/avatar-frames?${new URLSearchParams({ cursor })}` : '/api/avatar-frames';
+		const params = new URLSearchParams();
+		if (submittedQuery) params.set('query', submittedQuery);
+		if (catalogIndexedRef.current) params.set('page', String(page));
+		else if (cursor) params.set('cursor', cursor);
+		const url = `/api/avatar-frames${params.toString() ? `?${params}` : ''}`;
 		setLoading(true);
 		setRetryAttempt(0);
 		setError('');
@@ -67,6 +74,8 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 			.then((result) => {
 				setItems(result.items);
 				setTotalCount(result.totalCount);
+				catalogIndexedRef.current = Boolean(result.catalogIndexed);
+				setCatalogIndexed(catalogIndexedRef.current);
 				cursors.current[page + 1] = result.nextCursor || null;
 			})
 			.catch((caught: unknown) => {
@@ -83,10 +92,14 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 			});
 
 		return () => controller.abort();
-	}, [expanded, page]);
+	}, [expanded, page, submittedQuery]);
 
 	function searchFrames(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		setPage(0);
+		cursors.current = [null];
+		catalogIndexedRef.current = false;
+		setCatalogIndexed(false);
 		setSubmittedQuery(query.trim());
 	}
 
@@ -95,6 +108,8 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 		setSubmittedQuery('');
 		setPage(0);
 		cursors.current = [null];
+		catalogIndexedRef.current = false;
+		setCatalogIndexed(false);
 		onChange(null);
 	}
 
@@ -158,7 +173,7 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 
 					<form className="background-search is-large" onSubmit={searchFrames}>
 						<Search size={17} aria-hidden="true" />
-						<input aria-label="Filter avatar frames" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter this page" maxLength={80} autoFocus={expanded} />
+						<input aria-label="Search avatar frames" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search avatar frames" maxLength={80} autoFocus={expanded} />
 						<button type="submit" aria-label="Filter avatar frames"><Search size={17} /></button>
 					</form>
 
@@ -194,7 +209,7 @@ export default function AvatarFramePicker({ sourceAvatar, sourceFrameImage, valu
 						<div className="background-pagination">
 							<button type="button" aria-label="Previous avatar frames" disabled={page === 0 || loading} onClick={() => setPage((current) => current - 1)}><ChevronLeft size={18} /></button>
 							<span>{pageCount ? `${page + 1} / ${pageCount.toLocaleString()}` : '0 / 0'}</span>
-							<button type="button" aria-label="Next avatar frames" disabled={loading || !cursors.current[page + 1]} onClick={() => setPage((current) => current + 1)}><ChevronRight size={18} /></button>
+							<button type="button" aria-label="Next avatar frames" disabled={loading || (catalogIndexed ? page + 1 >= pageCount : !cursors.current[page + 1])} onClick={() => setPage((current) => current + 1)}><ChevronRight size={18} /></button>
 						</div>
 					</div>
 				</div>

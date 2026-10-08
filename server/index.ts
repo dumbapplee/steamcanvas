@@ -1,12 +1,24 @@
 import axios from 'axios';
 import { load } from 'cheerio';
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
+import { Pool } from 'pg';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const steamHost = 'steamcommunity.com';
 const steamImageHost = 'community.cloudflare.steamstatic.com';
+const catalogPool = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL, max: 4 })
+  : null;
+const catalogCategories = [
+  { key: 'points-backgrounds', communityItemClass: 3 },
+  { key: 'avatar-frames', communityItemClass: 14 },
+  { key: 'profile-themes', communityItemClass: 8 },
+] as const;
+type CatalogCategory = typeof catalogCategories[number]['key'];
+type CatalogItem = { id: string; name: string; game: string; [key: string]: unknown };
 
 type SteamMarketItem = {
   name?: string;
@@ -56,6 +68,12 @@ type SteamPointShopResponse = {
       };
     }>;
   };
+};
+
+type PointShopPage = {
+  items: CatalogItem[];
+  totalCount: number;
+  nextCursor: string | null;
 };
 
 type PublicScreenshot = {
@@ -237,6 +255,221 @@ function makeRewardDefinitionsQuery(defids: number[]): string {
   return Buffer.concat([encodeVarint(10), encodeVarint(query.length), query]).toString('base64');
 }
 
+async function fetchPointShopPage(category: CatalogCategory, cursor?: string): Promise<PointShopPage> {
+  const categoryConfig = catalogCategories.find((item) => item.key === category)!;
+  const apiUrl = new URL('/ILoyaltyRewardsService/BatchedQueryRewardItems/v1', 'https://api.steampowered.com');
+  apiUrl.searchParams.set('origin', 'https://store.steampowered.com');
+  apiUrl.searchParams.set('input_protobuf_encoded', makePointsShopQuery(cursor, categoryConfig.communityItemClass));
+  apiUrl.searchParams.set('format', 'json');
+
+  const result = await axios.get<SteamPointShopResponse>(apiUrl.href, {
+    timeout: 15000,
+    headers: { Accept: 'application/json' },
+  });
+  const responses = result.data.response?.responses?.filter((entry) => entry.eresult === 1 && Array.isArray(entry.response?.definitions)) || [];
+  const pointShopResponse = category === 'profile-themes'
+    ? responses.map((entry) => entry.response!).sort((left, right) => (right.definitions?.length || 0) - (left.definitions?.length || 0))[0]
+    : responses[0]?.response;
+  if (!pointShopResponse || !Array.isArray(pointShopResponse.definitions)) throw new Error(`Steam returned an invalid ${category} catalog.`);
+
+  const items = pointShopResponse.definitions.flatMap((definition): CatalogItem[] => {
+    const data = definition.community_item_data;
+    const appid = definition.appid;
+    const image = data?.item_image_large;
+    const defid = definition.defid;
+    if (!definition.active || definition.community_item_class !== categoryConfig.communityItemClass || !appid || !defid || !image) return [];
+    const assetBase = `https://shared.fastly.steamstatic.com/community_assets/images/items/${appid}/`;
+    const steamUrl = `https://store.steampowered.com/points/shop/app/${appid}`;
+
+    if (category === 'points-backgrounds') {
+      if (!data?.animated) return [];
+      return [{
+        id: `points:${appid}:${defid}`,
+        name: data.item_title || data.item_name || 'Animated profile background',
+        game: String(appid),
+        price: '',
+        imageUrl: `https://community.fastly.steamstatic.com/economy/profilebackground/items/${appid}/${image}?size=320x200`,
+        videoPoster: `${assetBase}${image}`,
+        steamUrl,
+        animated: true,
+        videoWebm: data.item_movie_webm ? `${assetBase}${data.item_movie_webm}` : undefined,
+        videoMp4: data.item_movie_mp4 ? `${assetBase}${data.item_movie_mp4}` : undefined,
+      }];
+    }
+
+    if (category === 'avatar-frames') {
+      return [{
+        id: `frame:${appid}:${defid}`,
+        name: data?.item_title || data?.item_name || 'Avatar frame',
+        game: String(appid),
+        imageUrl: `${assetBase}${image}`,
+        thumbnailUrl: `${assetBase}${data?.item_image_small || image}`,
+        steamUrl,
+        animatedImageUrl: data?.animated && data.item_image_small ? `${assetBase}${data.item_image_small}` : undefined,
+        animated: Boolean(data?.animated),
+      }];
+    }
+
+    if (!data?.profile_theme_id || !definition.bundle_defids?.length) return [];
+    return [{
+      id: `theme:${appid}:${defid}`,
+      name: data.item_title || data.item_name || 'Profile theme',
+      game: String(appid),
+      appid,
+      communityItemType: definition.community_item_type,
+      profileThemeId: data.profile_theme_id,
+      bundleDefids: definition.bundle_defids,
+      imageUrl: `${assetBase}${image}`,
+      thumbnailUrl: `${assetBase}${data.item_image_small || image}`,
+      steamUrl,
+    }];
+  });
+
+  return {
+    items,
+    totalCount: pointShopResponse.total_count || items.length,
+    nextCursor: pointShopResponse.next_cursor || null,
+  };
+}
+
+let catalogDbReady: Promise<void> | null = null;
+async function ensureCatalogDatabase(): Promise<void> {
+  if (!catalogPool) throw new Error('DATABASE_URL is not configured.');
+  if (!catalogDbReady) {
+    catalogDbReady = (async () => {
+      await catalogPool.query(`
+        CREATE TABLE IF NOT EXISTS points_catalog_items (
+          category TEXT NOT NULL,
+          id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          game TEXT NOT NULL,
+          payload JSONB NOT NULL,
+          last_seen_run UUID NOT NULL,
+          PRIMARY KEY (category, id)
+        );
+        CREATE INDEX IF NOT EXISTS points_catalog_search_idx ON points_catalog_items (category, lower(name));
+        CREATE TABLE IF NOT EXISTS points_catalog_sync (
+          category TEXT PRIMARY KEY,
+          cursor TEXT,
+          run_id UUID,
+          complete BOOLEAN NOT NULL DEFAULT FALSE,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+    })().catch((error) => {
+      catalogDbReady = null;
+      throw error;
+    });
+  }
+  await catalogDbReady;
+}
+
+async function searchIndexedCatalog(category: CatalogCategory, query: string, page: number): Promise<{ items: CatalogItem[]; totalCount: number; pageSize: number } | null> {
+  if (!catalogPool) return null;
+  await ensureCatalogDatabase();
+  const state = await catalogPool.query<{ complete: boolean }>('SELECT complete FROM points_catalog_sync WHERE category = $1', [category]);
+  if (!state.rows[0]?.complete) return null;
+  const term = `%${query.replace(/[\\%_]/g, '\\$&')}%`;
+  const count = await catalogPool.query<{ count: string }>(
+    'SELECT COUNT(*)::text AS count FROM points_catalog_items WHERE category = $1 AND (name ILIKE $2 ESCAPE \'\\\' OR game ILIKE $2 ESCAPE \'\\\')',
+    [category, term],
+  );
+  const result = await catalogPool.query<{ payload: CatalogItem }>(
+    'SELECT payload FROM points_catalog_items WHERE category = $1 AND (name ILIKE $2 ESCAPE \'\\\' OR game ILIKE $2 ESCAPE \'\\\') ORDER BY lower(name), id LIMIT 20 OFFSET $3',
+    [category, term, page * 20],
+  );
+  return { items: result.rows.map((row) => row.payload), totalCount: Number(count.rows[0]?.count || 0), pageSize: 20 };
+}
+
+let catalogSyncRunning = false;
+async function syncPointsCatalog(): Promise<void> {
+  if (!catalogPool || catalogSyncRunning) return;
+  catalogSyncRunning = true;
+  let lockClient: import('pg').PoolClient | undefined;
+  try {
+    await ensureCatalogDatabase();
+    lockClient = await catalogPool.connect();
+    const lockResult = await lockClient.query<{ locked: boolean }>('SELECT pg_try_advisory_lock(741902318) AS locked');
+    if (!lockResult.rows[0]?.locked) return;
+
+    for (const { key: category } of catalogCategories) {
+      const stateResult = await lockClient.query<{ cursor: string | null; run_id: string | null }>(
+        'SELECT cursor, run_id FROM points_catalog_sync WHERE category = $1', [category],
+      );
+      const current = stateResult.rows[0];
+      const runId = current?.run_id || randomUUID();
+      let cursor = current?.run_id ? current.cursor || undefined : undefined;
+      if (!current?.run_id) {
+        await lockClient.query(
+          'INSERT INTO points_catalog_sync (category, cursor, run_id, complete) VALUES ($1, NULL, $2, FALSE) ON CONFLICT (category) DO UPDATE SET cursor = NULL, run_id = $2, updated_at = NOW()',
+          [category, runId],
+        );
+      }
+
+      do {
+        const page = await fetchPointShopPage(category, cursor);
+        const client = await catalogPool.connect();
+        try {
+          await client.query('BEGIN');
+          for (const item of page.items) {
+            await client.query(
+              'INSERT INTO points_catalog_items (category, id, name, game, payload, last_seen_run) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (category, id) DO UPDATE SET name = EXCLUDED.name, game = EXCLUDED.game, payload = EXCLUDED.payload, last_seen_run = EXCLUDED.last_seen_run',
+              [category, item.id, item.name, item.game, JSON.stringify(item), runId],
+            );
+          }
+          await client.query(
+            'UPDATE points_catalog_sync SET cursor = $2, run_id = $3, updated_at = NOW() WHERE category = $1',
+            [category, page.nextCursor, runId],
+          );
+          if (!page.nextCursor) {
+            await client.query('DELETE FROM points_catalog_items WHERE category = $1 AND last_seen_run <> $2', [category, runId]);
+            await client.query(
+              'UPDATE points_catalog_sync SET cursor = NULL, run_id = NULL, complete = TRUE, updated_at = NOW() WHERE category = $1',
+              [category],
+            );
+          }
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+        cursor = page.nextCursor || undefined;
+      } while (cursor);
+    }
+    console.log('Points Shop catalog sync completed.');
+  } catch (error) {
+    console.error('Points Shop catalog sync paused; it will resume on the next run.', error);
+  } finally {
+    if (lockClient) {
+      try { await lockClient.query('SELECT pg_advisory_unlock(741902318)'); } catch { /* connection may already be closed */ }
+      lockClient.release();
+    }
+    catalogSyncRunning = false;
+  }
+}
+
+async function respondWithIndexedSearch(category: CatalogCategory, request: express.Request, response: express.Response): Promise<boolean> {
+  const query = typeof request.query.query === 'string' ? request.query.query.trim().slice(0, 80) : '';
+  if (typeof request.query.cursor === 'string') return false;
+  const page = Number(request.query.page ?? 0);
+  if (!Number.isSafeInteger(page) || page < 0 || page > 5000) {
+    response.status(400).json({ error: 'Invalid catalog search page.' });
+    return true;
+  }
+  try {
+    const result = await searchIndexedCatalog(category, query, page);
+    if (!result) return false;
+    response.setHeader('Cache-Control', 'public, max-age=300');
+    response.json({ ...result, nextCursor: null, catalogIndexed: true });
+    return true;
+  } catch (error) {
+    console.error(`Could not search indexed ${category}; using Steam fallback.`, error);
+    return false;
+  }
+}
+
 app.use(express.json({ limit: '4kb' }));
 
 app.get('/api/backgrounds', async (request, response) => {
@@ -314,6 +547,7 @@ app.get('/api/backgrounds', async (request, response) => {
 });
 
 app.get('/api/points-backgrounds', async (request, response) => {
+  if (await respondWithIndexedSearch('points-backgrounds', request, response)) return;
   const cursor = typeof request.query.cursor === 'string' ? request.query.cursor : '';
   if (cursor && (cursor.length > 128 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cursor))) {
     response.status(400).json({ error: 'Invalid Points Shop page cursor.' });
@@ -372,6 +606,7 @@ app.get('/api/points-backgrounds', async (request, response) => {
 });
 
 app.get('/api/avatar-frames', async (request, response) => {
+  if (await respondWithIndexedSearch('avatar-frames', request, response)) return;
   const cursor = typeof request.query.cursor === 'string' ? request.query.cursor : '';
   if (cursor && (cursor.length > 128 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cursor))) {
     response.status(400).json({ error: 'Invalid avatar frame page cursor.' });
@@ -428,6 +663,7 @@ app.get('/api/avatar-frames', async (request, response) => {
 });
 
 app.get('/api/profile-themes', async (request, response) => {
+  if (await respondWithIndexedSearch('profile-themes', request, response)) return;
   const cursor = typeof request.query.cursor === 'string' ? request.query.cursor : '';
   if (cursor && (cursor.length > 128 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cursor))) {
     response.status(400).json({ error: 'Invalid profile theme page cursor.' });
@@ -770,4 +1006,12 @@ app.get(/^(?!\/api(?:\/|$)).*/, (_request, response) => {
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`SteamCanvas listening on http://localhost:${port}`);
+  if (catalogPool) {
+    const initialSync = setTimeout(() => void syncPointsCatalog(), 5000);
+    initialSync.unref();
+    const dailySync = setInterval(() => void syncPointsCatalog(), 24 * 60 * 60 * 1000);
+    dailySync.unref();
+  } else {
+    console.log('DATABASE_URL is not configured; Points Shop search will use the Steam fallback.');
+  }
 });

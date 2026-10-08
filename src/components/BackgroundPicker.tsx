@@ -20,6 +20,7 @@ type BackgroundResponse = {
 	totalCount: number;
 	pageSize: number;
 	nextCursor?: string | null;
+	catalogIndexed?: boolean;
 	error?: string;
 };
 
@@ -40,8 +41,10 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 	const [retryAttempt, setRetryAttempt] = useState(0);
 	const [error, setError] = useState('');
 	const [expanded, setExpanded] = useState(false);
+	const [pointShopIndexed, setPointShopIndexed] = useState(false);
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const pointShopCursors = useRef<Array<string | null>>([null]);
+	const pointShopIndexedRef = useRef(false);
 	const pageSize = source === 'market' ? 30 : 20;
 
 	useEffect(() => {
@@ -55,9 +58,16 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 		if (!expanded) return;
 
 		const controller = new AbortController();
-		const url = source === 'market'
-			? `/api/backgrounds?${new URLSearchParams({ query: submittedQuery, start: String(page * pageSize), count: String(pageSize) })}`
-			: `/api/points-backgrounds${pointShopCursors.current[page] ? `?${new URLSearchParams({ cursor: pointShopCursors.current[page] || '' })}` : ''}`;
+		let url: string;
+		if (source === 'market') {
+			url = `/api/backgrounds?${new URLSearchParams({ query: submittedQuery, start: String(page * pageSize), count: String(pageSize) })}`;
+		} else {
+			const params = new URLSearchParams();
+			if (submittedQuery) params.set('query', submittedQuery);
+			if (pointShopIndexedRef.current) params.set('page', String(page));
+			else if (pointShopCursors.current[page]) params.set('cursor', pointShopCursors.current[page] || '');
+			url = `/api/points-backgrounds${params.toString() ? `?${params}` : ''}`;
+		}
 
 		setLoading(true);
 		setRetryAttempt(0);
@@ -74,7 +84,11 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 			.then((result) => {
 				setItems(result.items);
 				setTotalCount(result.totalCount);
-				if (source === 'points') pointShopCursors.current[page + 1] = result.nextCursor || null;
+				if (source === 'points') {
+					pointShopIndexedRef.current = Boolean(result.catalogIndexed);
+					setPointShopIndexed(pointShopIndexedRef.current);
+					pointShopCursors.current[page + 1] = result.nextCursor || null;
+				}
 			})
 			.catch((caught: unknown) => {
 				if (caught instanceof DOMException && caught.name === 'AbortError') return;
@@ -97,20 +111,27 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 		setPage(0);
 		setQuery('');
 		setSubmittedQuery('');
+		pointShopIndexedRef.current = false;
+		setPointShopIndexed(false);
 		pointShopCursors.current = [null];
 	}
 
 	function searchBackgrounds(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		setPage(0);
+		pointShopIndexedRef.current = false;
+		setPointShopIndexed(false);
+		pointShopCursors.current = [null];
 		setSubmittedQuery(query.trim());
 	}
 
 	const visibleItems = source === 'points' && submittedQuery
-		? items.filter((item) => item.name.toLowerCase().includes(submittedQuery.toLowerCase()))
+		? items.filter((item) => `${item.name} ${item.game}`.toLowerCase().includes(submittedQuery.toLowerCase()))
 		: items;
 	const pageCount = Math.ceil(totalCount / pageSize);
-	const hasNextPage = source === 'market' ? (page + 1) * pageSize < totalCount : Boolean(pointShopCursors.current[page + 1]);
+	const hasNextPage = source === 'market'
+		? (page + 1) * pageSize < totalCount
+		: pointShopIndexed ? page + 1 < pageCount : Boolean(pointShopCursors.current[page + 1]);
 	const previewImage = value ? `url("${value.imageUrl}")` : sourceBackgroundImage;
 	const currentName = value?.name || (sourceBackgroundImage && sourceBackgroundImage !== 'none' ? 'Current profile background' : 'No background on profile');
 	const steamUrl = value?.steamUrl || (value?.id.startsWith('points:')
@@ -179,7 +200,7 @@ export default function BackgroundPicker({ sourceBackgroundImage, value, onChang
 							aria-label="Search Steam profile backgrounds"
 							value={query}
 							onChange={(event) => setQuery(event.target.value)}
-							placeholder={source === 'market' ? 'Search backgrounds' : 'Filter this page'}
+							placeholder={source === 'market' ? 'Search backgrounds' : 'Search animated backgrounds'}
 							maxLength={80}
 							autoFocus={expanded}
 						/>

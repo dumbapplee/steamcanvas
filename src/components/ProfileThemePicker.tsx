@@ -27,6 +27,7 @@ type ProfileThemeResponse = {
 	totalCount: number;
 	pageSize: number;
 	nextCursor?: string | null;
+	catalogIndexed?: boolean;
 	error?: string;
 };
 
@@ -48,9 +49,12 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState('');
 	const [query, setQuery] = useState('');
+	const [submittedQuery, setSubmittedQuery] = useState('');
+	const [catalogIndexed, setCatalogIndexed] = useState(false);
 	const [applyingThemeId, setApplyingThemeId] = useState<string | null>(null);
 	const [retryAttempt, setRetryAttempt] = useState(0);
 	const cursors = useRef<Array<string | null>>([null]);
+	const catalogIndexedRef = useRef(false);
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const applyController = useRef<AbortController | null>(null);
 
@@ -73,7 +77,11 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 		if (!expanded) return;
 		const controller = new AbortController();
 		const cursor = cursors.current[page];
-		const url = cursor ? `/api/profile-themes?${new URLSearchParams({ cursor })}` : '/api/profile-themes';
+		const params = new URLSearchParams();
+		if (submittedQuery) params.set('query', submittedQuery);
+		if (catalogIndexedRef.current) params.set('page', String(page));
+		else if (cursor) params.set('cursor', cursor);
+		const url = `/api/profile-themes${params.toString() ? `?${params}` : ''}`;
 		setLoading(true);
 		setRetryAttempt(0);
 		setError('');
@@ -86,6 +94,8 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 			.then((result) => {
 				setItems(result.items);
 				setTotalCount(result.totalCount);
+				catalogIndexedRef.current = Boolean(result.catalogIndexed);
+				setCatalogIndexed(catalogIndexedRef.current);
 				cursors.current[page + 1] = result.nextCursor || null;
 			})
 			.catch((caught: unknown) => {
@@ -101,7 +111,16 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 				}
 			});
 		return () => controller.abort();
-	}, [expanded, page]);
+	}, [expanded, page, submittedQuery]);
+
+	function searchThemes(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		setPage(0);
+		cursors.current = [null];
+		catalogIndexedRef.current = false;
+		setCatalogIndexed(false);
+		setSubmittedQuery(query.trim());
+	}
 
 	async function applyTheme(theme: SteamProfileTheme) {
 		applyController.current?.abort();
@@ -135,8 +154,8 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 		}
 	}
 
-	const visibleItems = query.trim()
-		? items.filter((item) => `${item.name} ${item.game}`.toLowerCase().includes(query.trim().toLowerCase()))
+	const visibleItems = submittedQuery
+		? items.filter((item) => `${item.name} ${item.game}`.toLowerCase().includes(submittedQuery.toLowerCase()))
 		: items;
 	const pageCount = Math.ceil(totalCount / 20);
 	const selectedSteamUrl = value?.steamUrl || (value
@@ -178,9 +197,10 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 						<button className="icon-button" type="button" title="Close profile themes" aria-label="Close profile themes" onClick={() => setExpanded(false)}><X size={18} /></button>
 					</header>
 
-					<form className="background-search is-large" onSubmit={(event) => event.preventDefault()}>
+					<form className="background-search is-large" onSubmit={searchThemes}>
 						<Search size={17} aria-hidden="true" />
-						<input aria-label="Filter profile themes" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter themes on this page" maxLength={80} autoFocus={expanded} />
+						<input aria-label="Search profile themes" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search profile themes" maxLength={80} autoFocus={expanded} />
+						<button type="submit" aria-label="Search profile themes"><Search size={17} /></button>
 					</form>
 
 					{error && <p className="background-error" role="alert">{error}</p>}
@@ -211,7 +231,7 @@ export default function ProfileThemePicker({ value, onApply }: ProfileThemePicke
 						<div className="background-pagination">
 							<button type="button" aria-label="Previous profile themes" disabled={page === 0 || loading} onClick={() => setPage((current) => current - 1)}><ChevronLeft size={18} /></button>
 							<span>{pageCount ? `${page + 1} / ${pageCount.toLocaleString()}` : '0 / 0'}</span>
-							<button type="button" aria-label="Next profile themes" disabled={loading || !cursors.current[page + 1]} onClick={() => setPage((current) => current + 1)}><ChevronRight size={18} /></button>
+							<button type="button" aria-label="Next profile themes" disabled={loading || (catalogIndexed ? page + 1 >= pageCount : !cursors.current[page + 1])} onClick={() => setPage((current) => current + 1)}><ChevronRight size={18} /></button>
 						</div>
 					</div>
 				</div>
