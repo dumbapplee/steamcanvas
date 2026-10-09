@@ -614,7 +614,6 @@ export default function App() {
                 <span className="entry-tool-mark entry-tool-showcases" aria-hidden="true"><i /><i /><i /></span>
               </div>
             </div>
-            <div className="entry-tools-note"><ShieldCheck size={15} /> Try it on here first. Your Steam profile stays as it is.</div>
           </aside>
         </section>
       ) : (
