@@ -383,6 +383,8 @@ a { color: inherit; }
 .showcase-layout-icon.is-four { grid-template-rows: repeat(3, minmax(0, 1fr)); }
 .showcase-layout-icon.is-four i:first-child { grid-row: 1 / 4; height: 100%; }
 .showcase-layout-icon.is-four i:not(:first-child) { width: 100%; height: 100%; }
+.showcase-layout-icon.is-workshop-1 { grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: 1fr; }
+.showcase-layout-icon.is-workshop-2 { grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
 .showcase-editor-layout-choice button.is-active .showcase-layout-icon i { background: #c4f36a; }
 .showcase-layout-copy { min-width: 0; display: grid; gap: 3px; }
 .showcase-layout-copy strong { font-size: 10px; font-weight: 600; }

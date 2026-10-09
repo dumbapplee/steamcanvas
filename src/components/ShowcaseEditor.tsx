@@ -42,11 +42,13 @@ type ShowcaseEditorProps = {
 	exportAssetsRef: { current: (() => Promise<void>) | null };
 };
 
+type AnimatedMosaic = { width: number; height: number; mainWidth: number; panelWidths?: number[]; panelRegions?: Array<{ x: number; y: number; width: number; height: number }>; format: 'gif' | 'apng' };
 type ArtworkMosaic = {
 	images: string[];
 	previewImages?: string[];
 	panelDimensions?: Array<{ width: number; height: number }>;
-	animated?: { width: number; height: number; mainWidth: number; panelWidths?: number[]; panelRegions?: Array<{ x: number; y: number; width: number; height: number }>; format: 'gif' | 'apng' };
+	animated?: AnimatedMosaic;
+	animatedRows?: Array<{ startIndex: number; file: File; mosaic: AnimatedMosaic }>;
 };
 
 type PreviewPanel = { src: string; width: number; height: number };
@@ -66,8 +68,9 @@ type ShowcasePointerGesture = {
 	originalUserSelect: string;
 };
 
-type ImageInputMode = 'composite' | 'separate' | 'public';
+type ImageInputMode = 'composite' | 'separate' | 'public' | 'workshop-rows';
 type ArtworkLayout = 'main-side' | 'main-three-side';
+type WorkshopRows = 1 | 2;
 
 function readImageFile(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -98,12 +101,16 @@ function classifyShowcase(element: HTMLElement): ShowcaseKind {
 	return element.querySelector('.screenshot_showcase_primary.single') ? 'featured-artwork' : 'artwork';
 }
 
-function readUploadedAssets(element: HTMLElement, kind: ShowcaseKind, title: string): Array<{ name: string; url: string }> {
+function getShowcaseImages(element: HTMLElement, kind: ShowcaseKind): HTMLImageElement[] {
 	const selector = kind === 'workshop'
 		? '.myworkshop_showcase .workshop_showcase_item_image'
 		: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot.showcase_slot img';
+	return [...element.querySelectorAll<HTMLImageElement>(selector)];
+}
+
+function readUploadedAssets(element: HTMLElement, kind: ShowcaseKind, title: string): Array<{ name: string; url: string }> {
 	const baseName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'showcase-artwork';
-	return [...element.querySelectorAll<HTMLImageElement>(selector)]
+	return getShowcaseImages(element, kind)
 		.filter((image) => !image.closest('[data-steamcanvas-empty-slot]') && /^data:image\//i.test(image.currentSrc || image.src))
 		.map((image, index) => {
 			const url = image.currentSrc || image.src;
@@ -118,8 +125,8 @@ function hasTwoPanelImageEditor(kind: ShowcaseKind): boolean {
 	return kind === 'artwork' || kind === 'screenshot';
 }
 
-function getMosaicPanelCount(kind: ShowcaseKind, layout: ArtworkLayout): number {
-	return kind === 'workshop' ? 5 : hasTwoPanelImageEditor(kind) ? layout === 'main-three-side' ? 4 : 2 : 1;
+function getMosaicPanelCount(kind: ShowcaseKind, layout: ArtworkLayout, workshopRows: WorkshopRows = 1): number {
+	return kind === 'workshop' ? workshopRows * 5 : hasTwoPanelImageEditor(kind) ? layout === 'main-three-side' ? 4 : 2 : 1;
 }
 
 function fitFeaturedImage(image: HTMLImageElement): void {
@@ -421,6 +428,20 @@ async function splitWorkshopMosaic(file: File): Promise<ArtworkMosaic> {
 	return { images: panels, panelDimensions: panelWidths.map((panelWidth) => ({ width: panelWidth, height })) };
 }
 
+async function splitWorkshopRows(files: File[]): Promise<ArtworkMosaic> {
+	if (files.length !== 2) throw new Error('Choose two images, one for each Workshop row.');
+	const rows = await Promise.all(files.map(splitWorkshopMosaic));
+	const animatedRows = rows.flatMap((row, index) => row.animated
+		? [{ startIndex: index * 5, file: files[index], mosaic: row.animated }]
+		: []);
+	return {
+		images: rows.flatMap((row) => row.images),
+		previewImages: rows.flatMap((row) => row.previewImages || row.images),
+		panelDimensions: rows.flatMap((row) => row.panelDimensions || []),
+		...(animatedRows.length ? { animatedRows } : {}),
+	};
+}
+
 function readBlobDataUrl(blob: Blob): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -608,6 +629,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [imageInputMode, setImageInputMode] = useState<ImageInputMode>('composite');
 	const [artworkLayout, setArtworkLayout] = useState<ArtworkLayout>('main-side');
+	const [workshopRows, setWorkshopRows] = useState<WorkshopRows>(1);
 	const [editorFiles, setEditorFiles] = useState<Array<EditorSource | null>>([]);
 	const [editorPreview, setEditorPreview] = useState<Array<PreviewPanel | null>>([]);
 	const [editorLoading, setEditorLoading] = useState(false);
@@ -922,7 +944,11 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		};
 	}, [entries, previewDocument]);
 
-	async function downloadShowcaseZip(exportableEntries: Array<{ entry: ShowcaseEntry; files: Array<{ name: string; url: string }>; index: number }>, filename: string) {
+	async function downloadShowcaseZip(
+		exportableEntries: Array<{ entry: ShowcaseEntry; files: Array<{ name: string; url: string }>; index: number }>,
+		filename: string,
+		includeProfileHtml = false,
+	) {
 		const folders: Record<ShowcaseKind, string> = {
 			artwork: 'Artwork Showcase',
 			'featured-artwork': 'Featured Artwork',
@@ -931,21 +957,111 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			other: '',
 		};
 		const archive = new JSZip();
+		const exportedImagePaths = new Map<HTMLImageElement, string>();
 		for (const { entry, files, index } of exportableEntries) {
 			const showcaseFolder = `${String(index + 1).padStart(2, '0')} - ${entry.title.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'Showcase'}`;
 			const folder = archive.folder(folders[entry.kind])?.folder(showcaseFolder);
 			if (!folder) continue;
-			for (const file of files) {
+			const imageElements = getShowcaseImages(entry.element, entry.kind);
+			for (const [fileIndex, file] of files.entries()) {
 				const response = await fetch(file.url);
 				if (!response.ok) throw new Error(`Could not read ${file.name}.`);
 				const blob = await response.blob();
-				folder.file(
-					file.name,
-					entry.kind === 'workshop'
-						? await prepareWorkshopImageForLongUpload(blob)
-						: blob,
-				);
+				const assetPath = `${folders[entry.kind]}/${showcaseFolder}/${file.name}`;
+				archive.file(assetPath, entry.kind === 'workshop' ? await prepareWorkshopImageForLongUpload(blob) : blob);
+				if (imageElements[fileIndex]) {
+					if (includeProfileHtml && entry.kind === 'workshop') {
+						const previewAssetPath = `Profile Preview Assets/${assetPath}`;
+						archive.file(previewAssetPath, blob);
+						exportedImagePaths.set(imageElements[fileIndex], previewAssetPath);
+					} else {
+						exportedImagePaths.set(imageElements[fileIndex], assetPath);
+					}
+				}
 			}
+		}
+		if (includeProfileHtml) {
+			if (!previewDocument) throw new Error('The profile preview is unavailable.');
+			const exportedDocument = previewDocument.cloneNode(true) as Document;
+			const sourceBaseUrl = previewDocument.baseURI;
+			const sourceUrlElements = [...previewDocument.querySelectorAll<HTMLElement>('[href], [src], [poster], [action], [srcset]')];
+			const exportedUrlElements = [...exportedDocument.querySelectorAll<HTMLElement>('[href], [src], [poster], [action], [srcset]')];
+			for (const [elementIndex, sourceElement] of sourceUrlElements.entries()) {
+				const exportedElement = exportedUrlElements[elementIndex];
+				if (!exportedElement) continue;
+				for (const attribute of ['href', 'src', 'poster', 'action']) {
+					const value = sourceElement.getAttribute(attribute);
+					if (!value || /^(data:|blob:|javascript:|mailto:|tel:|#)/i.test(value)) continue;
+					try {
+						exportedElement.setAttribute(attribute, new URL(value, sourceBaseUrl).href);
+					} catch {
+						throw new Error(`Could not resolve profile URL: ${value}`);
+					}
+				}
+				const srcset = sourceElement.getAttribute('srcset');
+				if (srcset && !/\bdata:/i.test(srcset)) {
+					const resolvedSrcset = srcset.split(',').map((candidate) => {
+						const [url, ...descriptors] = candidate.trim().split(/\s+/);
+						if (!url) return candidate;
+						try {
+							return [new URL(url, sourceBaseUrl).href, ...descriptors].join(' ');
+						} catch {
+							throw new Error(`Could not resolve profile image URL: ${url}`);
+						}
+					}).join(', ');
+					exportedElement.setAttribute('srcset', resolvedSrcset);
+				}
+			}
+			const sourceImages = [...previewDocument.querySelectorAll<HTMLImageElement>('img')];
+			const exportedImages = [...exportedDocument.querySelectorAll<HTMLImageElement>('img')];
+			const inlineAssetPaths = new Map<string, string>();
+			let inlineAssetIndex = 0;
+
+			for (const [imageIndex, sourceImage] of sourceImages.entries()) {
+				const exportedImage = exportedImages[imageIndex];
+				if (!exportedImage) continue;
+				let assetPath = exportedImagePaths.get(sourceImage);
+				const sourceUrl = sourceImage.getAttribute('src') || '';
+				if (!assetPath && /^data:image\//i.test(sourceUrl)) {
+					assetPath = inlineAssetPaths.get(sourceUrl);
+					if (!assetPath) {
+						const response = await fetch(sourceUrl);
+						if (!response.ok) throw new Error('Could not save an embedded profile image.');
+						const mime = sourceUrl.match(/^data:image\/([^;,]+)/i)?.[1]?.split('+')[0]?.toLowerCase() || 'png';
+						const extension = mime === 'jpeg' ? 'jpg' : /^[a-z0-9]+$/.test(mime) ? mime : 'png';
+						assetPath = `Profile Assets/image-${String(++inlineAssetIndex).padStart(3, '0')}.${extension}`;
+						archive.file(assetPath, await response.blob());
+						inlineAssetPaths.set(sourceUrl, assetPath);
+					}
+				}
+				if (assetPath) {
+					exportedImage.setAttribute('src', assetPath);
+					exportedImage.removeAttribute('srcset');
+					const sourceAnchor = sourceImage.closest<HTMLAnchorElement>('a');
+					const exportedAnchor = exportedImage.closest<HTMLAnchorElement>('a');
+					if (sourceAnchor && exportedAnchor && sourceAnchor.getAttribute('href') === sourceUrl) {
+						exportedAnchor.setAttribute('href', assetPath);
+					}
+				} else {
+					const resolvedSource = sourceImage.currentSrc || sourceImage.src;
+					if (resolvedSource) exportedImage.setAttribute('src', resolvedSource);
+				}
+				if (assetPath && sourceImage.style.transform && sourceImage.style.transform !== 'none') {
+					for (const property of ['width', 'height', 'max-width', 'min-height', 'object-fit', 'transform', 'transform-origin']) {
+						exportedImage.style.removeProperty(property);
+					}
+					exportedImage.style.display = 'block';
+					exportedImage.style.width = '100%';
+					exportedImage.style.height = 'auto';
+					exportedImage.style.maxWidth = '100%';
+					exportedImage.style.objectFit = 'fill';
+				}
+			}
+
+			exportedDocument.querySelectorAll('[data-steamcanvas-showcase-controls], style[data-steamcanvas-drag-cursor]').forEach((element) => element.remove());
+			const base = exportedDocument.querySelector('base') || exportedDocument.head.appendChild(exportedDocument.createElement('base'));
+			base.setAttribute('href', './');
+			archive.file('index.html', `<!DOCTYPE html>\n${exportedDocument.documentElement.outerHTML}`);
 		}
 		const blob = await archive.generateAsync({ type: 'blob' });
 		const url = URL.createObjectURL(blob);
@@ -989,13 +1105,13 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			setExportingShowcaseId('all');
 			try {
 				const baseName = profileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'steamcanvas';
-				await downloadShowcaseZip(exportableEntries, `${baseName}-showcase-artwork.zip`);
+				await downloadShowcaseZip(exportableEntries, `${baseName}-showcase-project.zip`, true);
 			} finally {
 				setExportingShowcaseId(null);
 			}
 		};
 		return () => { exportAssetsRef.current = null; };
-	}, [entries, exportAssetsRef, profileName, exportingShowcaseId]);
+	}, [entries, exportAssetsRef, profileName, exportingShowcaseId, previewDocument]);
 
 	function syncOrder(nextEntries: ShowcaseEntry[]) {
 		const area = getShowcaseArea(previewDocument);
@@ -1154,14 +1270,27 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	}
 
 	const activeEditor = entries.find((entry) => entry.id === editingId) || null;
-	const editorPanelCount = activeEditor ? getMosaicPanelCount(activeEditor.kind, artworkLayout) : 1;
+	const workshopSlotCount = activeEditor?.kind === 'workshop'
+		? activeEditor.element.querySelectorAll('.myworkshop_showcase .workshop_showcase_item_image').length
+		: 0;
+	const canUseDoubleWorkshopRows = workshopSlotCount >= 10;
+	const editorPanelCount = activeEditor ? getMosaicPanelCount(activeEditor.kind, artworkLayout, workshopRows) : 1;
+	const expectedEditorFiles = imageInputMode === 'workshop-rows'
+		? 2
+		: imageInputMode === 'separate' || imageInputMode === 'public' ? editorPanelCount : 1;
 
 	function openEditor(entry: ShowcaseEntry) {
 		const publicSelection = entry.element.dataset.steamcanvasPublicScreenshotData ? JSON.parse(entry.element.dataset.steamcanvasPublicScreenshotData) as PublicScreenshot[] : [];
 		const publicSelectionIds = publicSelection.map((item) => item.id);
 		const savedLayout = publicSelectionIds.length || entry.element.dataset.steamcanvasMosaicPanels === '4' ? 'main-three-side' : 'main-side';
+		const savedWorkshopRows: WorkshopRows = entry.kind === 'workshop'
+			&& entry.element.dataset.steamcanvasWorkshopRows === '2'
+			&& entry.element.querySelectorAll('.myworkshop_showcase .workshop_showcase_item_image').length >= 10
+			? 2
+			: 1;
 		setArtworkLayout(savedLayout);
-		const panelCount = getMosaicPanelCount(entry.kind, savedLayout);
+		setWorkshopRows(savedWorkshopRows);
+		const panelCount = getMosaicPanelCount(entry.kind, savedLayout, savedWorkshopRows);
 		const currentImages = [...entry.element.querySelectorAll<HTMLImageElement>(entry.kind === 'workshop'
 			? '.myworkshop_showcase .workshop_showcase_item_image'
 			: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot.showcase_slot img')];
@@ -1224,6 +1353,9 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			let panels: Array<PreviewPanel | null>;
 			if (mode === 'separate' || mode === 'public') {
 				panels = await Promise.all(files.map((file) => file ? readPreviewPanel(file) : Promise.resolve(null)));
+			} else if (mode === 'workshop-rows') {
+				const rows = await splitWorkshopRows(files.filter((file): file is File => !!file && !isPublicScreenshot(file)));
+				panels = rows.images.map((src, index) => ({ src: rows.previewImages?.[index] || src, ...(rows.panelDimensions?.[index] || { width: 1, height: 1 }) }));
 			} else if (files[0] && hasTwoPanelImageEditor(entry.kind)) {
 				const mosaic = await splitArtworkMosaic(files[0] as File, artworkLayout);
 				panels = mosaic.images.map((src, index) => ({ src: mosaic.previewImages?.[index] || src, ...(mosaic.panelDimensions?.[index] || { width: 16, height: 9 }) }));
@@ -1254,18 +1386,25 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 
 	function setShowcaseFiles(selected: File[]) {
 		if (!activeEditor) return;
-		const separate = selected.length > 1;
-		const mode = separate ? 'separate' : 'composite';
+		const isWorkshopRows = activeEditor.kind === 'workshop' && workshopRows === 2 && selected.length === 2;
+		const separate = selected.length === editorPanelCount && editorPanelCount > 1;
+		const mode: ImageInputMode = isWorkshopRows ? 'workshop-rows' : separate ? 'separate' : 'composite';
+		const validSingleImage = selected.length === 1 && !(activeEditor.kind === 'workshop' && workshopRows === 2);
+		const validSelection = validSingleImage || separate || isWorkshopRows;
+		if (!validSelection) {
+			setImageInputMode('composite');
+			setEditorFiles([]);
+			setEditorPreview([]);
+			setEditorError(activeEditor.kind === 'workshop' && workshopRows === 2
+				? `Choose two images (one per row) or exactly ${editorPanelCount} ready-made panels.`
+				: `Choose one complete image or exactly ${editorPanelCount} separate panels.`);
+			return;
+		}
 		setImageInputMode(mode);
 		const files = separate
 			? Array.from({ length: editorPanelCount }, (_, index) => selected[index] || null)
-			: selected.slice(0, 1);
+			: selected;
 		setEditorFiles(files);
-		if (selected.length > editorPanelCount && separate) {
-			setEditorError(`This layout uses ${editorPanelCount} panels; ${selected.length} files were selected.`);
-			setEditorPreview([]);
-			return;
-		}
 		setEditorError('');
 		void updateEditorPreview(activeEditor, files, mode);
 	}
@@ -1289,11 +1428,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	async function applyEditorChanges() {
 		if (!activeEditor) return;
 		const files = editorFiles.filter((file): file is EditorSource => file !== null);
-		const expectedFiles = imageInputMode === 'separate' || imageInputMode === 'public' ? editorPanelCount : 1;
-		if (files.length !== expectedFiles || editorLoading || editorError) return;
+		if (files.length !== expectedEditorFiles || editorLoading || editorError) return;
 		setEditorLoading(true);
 		try {
-			const applied = await updateArtwork(activeEditor, files);
+			const applied = await updateArtwork(activeEditor, files, imageInputMode);
 			if (applied) setEditingId(null);
 		} finally {
 			setEditorLoading(false);
@@ -1301,16 +1439,19 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		}
 	}
 
-	async function updateArtwork(entry: ShowcaseEntry, files: EditorSource[]): Promise<boolean> {
+	async function updateArtwork(entry: ShowcaseEntry, files: EditorSource[], mode: ImageInputMode): Promise<boolean> {
 		if (!files.length) return false;
 		if (files.some((file) => !isPublicScreenshot(file) && !/^image\/(png|jpeg|webp|gif|avif|apng)$/.test(file.type))) {
 			setEditorError('Choose PNG, JPG, WEBP, GIF, APNG, or AVIF images.');
 			return false;
 		}
-		const panelCount = getMosaicPanelCount(entry.kind, artworkLayout);
-		const separateUploads = panelCount > 1 && files.length === panelCount;
-		if (files.length !== 1 && !separateUploads) {
-			setEditorError(`Choose one complete image or exactly ${panelCount} separate panels.`);
+		const panelCount = getMosaicPanelCount(entry.kind, artworkLayout, workshopRows);
+		const workshopRowUploads = mode === 'workshop-rows' && entry.kind === 'workshop' && files.length === 2 && files.every((file) => !isPublicScreenshot(file));
+		const separateUploads = mode === 'separate' && panelCount > 1 && files.length === panelCount;
+		if (!workshopRowUploads && files.length !== 1 && !separateUploads && mode !== 'public') {
+			setEditorError(entry.kind === 'workshop' && workshopRows === 2
+				? `Choose two images (one per row) or exactly ${panelCount} ready-made panels.`
+				: `Choose one complete image or exactly ${panelCount} separate panels.`);
 			return false;
 		}
 		if (hasTwoPanelImageEditor(entry.kind)) {
@@ -1322,9 +1463,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				}
 			}
 		}
-		const images = [...entry.element.querySelectorAll<HTMLImageElement>(entry.kind === 'workshop'
-			? '.myworkshop_showcase .workshop_showcase_item_image'
-			: '.screenshot_showcase_primary img, .screenshot_showcase_smallscreenshot img')];
+		const images = getShowcaseImages(entry.element, entry.kind);
 		try {
 			let exportWarning = false;
 			const fullResolutionImages = files.every(isPublicScreenshot)
@@ -1349,6 +1488,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				: undefined;
 			const mosaic = files.every(isPublicScreenshot)
 				? { images: fullResolutionImages as string[] }
+				: workshopRowUploads
+					? await splitWorkshopRows(files.filter((file): file is File => !isPublicScreenshot(file)))
 				: separateUploads
 				? { images: await Promise.all(files.map((file) => readImageFile(file as File)) ) }
 				: hasTwoPanelImageEditor(entry.kind)
@@ -1361,12 +1502,25 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 					reader.onerror = () => reject(new Error('Could not read artwork image.'));
 					reader.readAsDataURL(files[0] as File);
 				})] };
+			if (workshopRowUploads && mosaic.animatedRows?.some((row) => row.mosaic.format === 'apng')) {
+				setEditorError('Two-row Workshop exports support static images and GIFs. Convert APNG files to GIF or use static images.');
+				return false;
+			}
+			const encodedWorkshopRows = workshopRowUploads
+				? await Promise.all((mosaic.animatedRows || []).map(async (row) => ({
+					startIndex: row.startIndex,
+					panels: await encodeAnimatedMosaic(row.file, row.mosaic),
+				})))
+				: [];
 			for (const [index, dataUrl] of mosaic.images.entries()) {
 				const image = images[index];
 				if (!image) break;
+				const animatedRow = mosaic.animatedRows?.find((row) => index >= row.startIndex && index < row.startIndex + 5);
+				const animation = animatedRow?.mosaic || mosaic.animated;
+				const animationPanelIndex = animatedRow ? index - animatedRow.startIndex : index;
 				image.src = dataUrl;
-				image.style.height = mosaic.animated ? `${mosaic.animated.height}px` : 'auto';
-				if (entry.kind === 'featured-artwork' && !mosaic.animated) fitFeaturedImage(image);
+				image.style.height = animation ? `${animation.height}px` : 'auto';
+				if (entry.kind === 'featured-artwork' && !animation) fitFeaturedImage(image);
 				image.closest<HTMLElement>('[data-steamcanvas-empty-slot]')?.removeAttribute('data-steamcanvas-empty-slot');
 				const anchor = image.closest<HTMLAnchorElement>('a');
 				anchor?.setAttribute('href', dataUrl);
@@ -1382,22 +1536,22 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 						anchor.style.width = '100%';
 						anchor.style.overflow = 'hidden';
 					}
-					if (!mosaic.animated) {
+					if (!animation) {
 						image.style.height = 'auto';
 						image.style.transform = 'none';
 					}
 				}
-				if (mosaic.animated && anchor) {
+				if (animation && anchor) {
 					anchor.style.display = 'block';
 					anchor.style.overflow = 'hidden';
-					const panelRegions = mosaic.animated.panelRegions || (mosaic.animated.panelWidths || [mosaic.animated.mainWidth, mosaic.animated.width - mosaic.animated.mainWidth]).map((width, panelIndex, widths) => ({
-						x: widths.slice(0, panelIndex).reduce((total, value) => total + value, 0), y: 0, width, height: mosaic.animated!.height,
+					const panelRegions = animation.panelRegions || (animation.panelWidths || [animation.mainWidth, animation.width - animation.mainWidth]).map((width, panelIndex, widths) => ({
+						x: widths.slice(0, panelIndex).reduce((total, value) => total + value, 0), y: 0, width, height: animation.height,
 					}));
-					const region = panelRegions[index];
+					const region = panelRegions[animationPanelIndex];
 					anchor.style.height = `${region.height}px`;
 					anchor.style.width = entry.kind === 'workshop' || index === 0 ? '100%' : `${region.width}px`;
-					image.style.width = `${mosaic.animated.width}px`;
-					image.style.height = `${mosaic.animated.height}px`;
+					image.style.width = `${animation.width}px`;
+					image.style.height = `${animation.height}px`;
 					image.style.maxWidth = 'none';
 					image.style.minHeight = '0';
 					image.style.objectFit = 'fill';
@@ -1405,6 +1559,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 					image.style.transformOrigin = 'top left';
 				}
 			}
+			if (entry.kind === 'workshop') entry.element.dataset.steamcanvasWorkshopRows = String(workshopRows);
 			if (hasTwoPanelImageEditor(entry.kind)) {
 				const sideSlots = [...entry.element.querySelectorAll<HTMLElement>('.screenshot_showcase_smallscreenshot.showcase_slot')];
 				const panelCount = getMosaicPanelCount(entry.kind, artworkLayout);
@@ -1456,8 +1611,19 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				}
 			}
 			if (entry.kind === 'workshop') {
-			const baseName = sourceName(files[0]).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || 'steam-workshop';
-				if (mosaic.animated?.format === 'gif') {
+				const baseName = sourceName(files[0]).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || 'steam-workshop';
+				if (workshopRowUploads) {
+					const animatedPanelUrls = new Map<number, string>();
+					encodedWorkshopRows.forEach(({ startIndex, panels }) => panels.forEach((url, index) => animatedPanelUrls.set(startIndex + index, url)));
+					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
+						...item,
+						exportFiles: mosaic.images.map((url, index) => ({
+							name: `${baseName}-${index + 1}.${animatedPanelUrls.has(index) ? 'gif' : 'png'}`,
+							url: animatedPanelUrls.get(index) || url,
+						})),
+						animatedArtwork: undefined,
+					}));
+				} else if (mosaic.animated?.format === 'gif') {
 					try {
 						const gifPanels = await encodeAnimatedMosaic(files[0] as File, mosaic.animated);
 						setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
@@ -1522,15 +1688,18 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		? { src: '', width: 126, height: 56 }
 		: index === 0 ? { src: '', width: 506, height: 284 } : { src: '', width: 100, height: 56 });
 	const previewSizes = Array.from({ length: editorPanelCount }, (_, index) => previewPanelSize(index));
-	const previewWidth = activeEditor?.kind === 'workshop' ? previewSizes.reduce((sum, panel) => sum + panel.width, 0) : activeEditor?.kind === 'featured-artwork' ? previewSizes[0].width : previewSizes[0].width + (previewSizes[1]?.width || 100);
+	const workshopRowWidths = Array.from({ length: workshopRows }, (_, row) => previewSizes.slice(row * 5, row * 5 + 5).reduce((sum, panel) => sum + panel.width, 0));
+	const workshopRowHeights = Array.from({ length: workshopRows }, (_, row) => Math.max(...previewSizes.slice(row * 5, row * 5 + 5).map((panel) => panel.height)));
+	const previewWidth = activeEditor?.kind === 'workshop' ? Math.max(...workshopRowWidths) : activeEditor?.kind === 'featured-artwork' ? previewSizes[0].width : previewSizes[0].width + (previewSizes[1]?.width || 100);
 	const previewHeight = activeEditor?.kind === 'workshop'
-		? Math.max(...previewSizes.map((panel) => panel.height))
+		? workshopRowHeights.reduce((sum, height) => sum + height, 4 * (workshopRows - 1))
 		: editorPanelCount === 4
 			? Math.max(previewSizes[0].height, previewSizes.slice(1).reduce((sum, panel) => sum + panel.height, 0) + 8)
 			: Math.max(...previewSizes.map((panel) => panel.height));
 	const previewAspectRatio = previewWidth / Math.max(1, previewHeight);
 	const previewRenderWidth = Math.min(480, 390 * previewAspectRatio);
-	const isAnimatedPreview = imageInputMode === 'composite' && !!editorFiles[0] && !isPublicScreenshot(editorFiles[0]) && /\.(gif|apng)$/i.test(editorFiles[0].name);
+	const isAnimatedPreview = (imageInputMode === 'composite' || imageInputMode === 'workshop-rows')
+		&& editorFiles.some((file) => !!file && !isPublicScreenshot(file) && /\.(gif|apng)$/i.test(file.name));
 	const publicScreenshotMatches = publicScreenshots.filter((screenshot) => !publicScreenshotSearch.trim() || `${screenshot.searchText || ''} ${screenshot.id} ${screenshot.steamUrl}`.toLowerCase().includes(publicScreenshotSearch.trim().toLowerCase()));
 	const publicScreenshotPageSize = publicScreenshotExpanded ? 9 : 6;
 	const publicScreenshotPageCount = Math.max(1, Math.ceil(publicScreenshotMatches.length / publicScreenshotPageSize));
@@ -1539,8 +1708,9 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		width: `min(100%, ${previewRenderWidth}px)`,
 		aspectRatio: `${previewWidth} / ${previewHeight}`,
 		gridTemplateColumns: activeEditor?.kind === 'workshop'
-			? previewSizes.map((panel) => `${panel.width}fr`).join(' ')
+			? 'repeat(5, minmax(0, 1fr))'
 			: activeEditor?.kind === 'featured-artwork' ? '1fr' : `${previewSizes[0].width}fr ${previewSizes[1]?.width || 100}fr`,
+		gridTemplateRows: activeEditor?.kind === 'workshop' ? `repeat(${workshopRows}, auto)` : undefined,
 	};
 	const renderPreviewPanel = (index: number, label: string, extraClass = '') => <div className={`showcase-editor-preview-panel ${extraClass}`} key={index} style={{ aspectRatio: `${previewPanelSize(index).width} / ${previewPanelSize(index).height}` }}>
 		<span>{label}</span>
@@ -1639,10 +1809,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				{activeEditor.kind !== 'other' && <>
 					<div className="showcase-editor-layout">
 						<div className="showcase-editor-preview" aria-busy={editorLoading}>
-							<div className="showcase-editor-preview-heading"><strong>Preview</strong><span>{isAnimatedPreview ? 'GIF · first frame' : activeEditor.kind === 'featured-artwork' ? 'Single image' : `${editorPanelCount} panels`}</span></div>
+							<div className="showcase-editor-preview-heading"><strong>Preview</strong><span>{isAnimatedPreview ? 'GIF · first frame' : activeEditor.kind === 'featured-artwork' ? 'Single image' : activeEditor.kind === 'workshop' ? `${workshopRows} row${workshopRows === 1 ? '' : 's'} · ${editorPanelCount} panels` : `${editorPanelCount} panels`}</span></div>
 							<div className={`showcase-editor-preview-panels ${activeEditor.kind === 'workshop' ? 'is-workshop' : activeEditor.kind === 'featured-artwork' ? 'is-featured' : editorPanelCount === 4 ? 'is-four-panel' : 'is-two-panel'}`} style={previewStyle}>
 								{activeEditor.kind === 'workshop'
-									? Array.from({ length: 5 }, (_, index) => renderPreviewPanel(index, `Panel ${index + 1}`))
+									? Array.from({ length: editorPanelCount }, (_, index) => renderPreviewPanel(index, `Row ${Math.floor(index / 5) + 1} · ${index % 5 + 1}`))
 									: editorPanelCount === 4
 										? <>{renderPreviewPanel(0, 'Main')}<div className="showcase-editor-preview-side-stack">{[1, 2, 3].map((index) => renderPreviewPanel(index, `Side ${index}`, 'is-side'))}</div></>
 										: editorPanelCount === 2
@@ -1651,6 +1821,21 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							</div>
 						</div>
 						<aside className="showcase-editor-controls">
+							{activeEditor.kind === 'workshop' && canUseDoubleWorkshopRows && <div className="showcase-editor-control-group">
+								<span className="showcase-editor-label">LAYOUT</span>
+								<div className="showcase-editor-layout-choice" role="group" aria-label="Workshop showcase layout">
+									{([1, 2] as const).map((rows) => <button key={rows} className={workshopRows === rows ? 'is-active' : ''} type="button" aria-pressed={workshopRows === rows} onClick={() => {
+										setWorkshopRows(rows);
+										setImageInputMode('composite');
+										setEditorFiles([]);
+										setEditorPreview([]);
+										setEditorError('');
+									}}>
+										<span className={`showcase-layout-icon is-workshop-${rows}`} aria-hidden="true">{Array.from({ length: rows * 5 }, (_, index) => <i key={index} />)}</span>
+										<span className="showcase-layout-copy"><strong>{rows} × 5</strong><small>{rows === 1 ? 'One image · 5 slots' : 'Two images · 10 slots'}</small></span>
+									</button>)}
+								</div>
+							</div>}
 							{(activeEditor.kind === 'artwork' || activeEditor.kind === 'screenshot') && <div className="showcase-editor-control-group"><span className="showcase-editor-label">LAYOUT</span><div className="showcase-editor-layout-choice" role="group" aria-label="Showcase layout">
 								<button className={artworkLayout === 'main-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-side'} onClick={() => { setArtworkLayout('main-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-two"><i /><i /></span><span className="showcase-layout-copy"><strong>Main + side</strong><small>2 panels</small></span></button>
 								<button className={artworkLayout === 'main-three-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-three-side'} onClick={() => { setArtworkLayout('main-three-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-four"><i /><i /><i /><i /></span><span className="showcase-layout-copy"><strong>Main + 3 sides</strong><small>4 panels</small></span></button>
@@ -1679,9 +1864,11 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							<label className={`showcase-editor-upload ${editorPanelCount > 1 ? 'is-multiple' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setShowcaseFiles([...event.dataTransfer.files]); }}>
 								<ImagePlus size={19} />
 								<span>
-									<strong>{editorFiles.filter(Boolean).length ? imageInputMode === 'separate' || imageInputMode === 'public' ? `${editorFiles.filter(Boolean).length} of ${editorPanelCount} panels ready` : sourceName(editorFiles[0] as EditorSource) : editorPanelCount > 1 ? 'Drop one image or choose ready-made panels' : 'Drop or choose an image'}</strong>
-									<small>{editorPanelCount > 1 ? activeEditor.kind === 'workshop' ? 'One image is split across all five Workshop slots.' : `One image is split to fit this Steam layout. Or select ${editorPanelCount} separate panels.` : 'Image or animated GIF'}</small>
-									{(imageInputMode === 'separate' || imageInputMode === 'public') && editorFiles.filter(Boolean).length > 0 && <small className="showcase-editor-file-list">{editorFiles.filter((file): file is EditorSource => !!file).map(sourceName).join(' · ')}</small>}
+									<strong>{editorFiles.filter(Boolean).length ? imageInputMode === 'workshop-rows' ? `${editorFiles.filter(Boolean).length} row images ready` : imageInputMode === 'separate' || imageInputMode === 'public' ? `${editorFiles.filter(Boolean).length} of ${editorPanelCount} panels ready` : sourceName(editorFiles[0] as EditorSource) : activeEditor.kind === 'workshop' && workshopRows === 2 ? 'Choose two images, one per row' : editorPanelCount > 1 ? 'Drop one image or choose ready-made panels' : 'Drop or choose an image'}</strong>
+									<small>{activeEditor.kind === 'workshop'
+										? workshopRows === 2 ? 'Each image is split across five slots. Or select ten ready-made panels.' : 'One image is split across five Workshop slots.'
+										: editorPanelCount > 1 ? `One image is split to fit this Steam layout. Or select ${editorPanelCount} separate panels.` : 'Image or animated GIF'}</small>
+									{(imageInputMode === 'separate' || imageInputMode === 'public' || imageInputMode === 'workshop-rows') && editorFiles.filter(Boolean).length > 0 && <small className="showcase-editor-file-list">{editorFiles.filter((file): file is EditorSource => !!file).map(sourceName).join(' · ')}</small>}
 								</span>
 								<input type="file" multiple={editorPanelCount > 1} accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" onChange={selectShowcaseFiles} />
 							</label>
@@ -1693,7 +1880,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				<footer className="showcase-editor-footer">
 					<button className="showcase-editor-remove" type="button" onClick={() => { removeShowcase(activeEditor); setEditingId(null); }}><Trash2 size={15} /> Remove showcase</button>
 					<button className="showcase-editor-cancel" type="button" disabled={editorLoading} onClick={() => setEditingId(null)}>Cancel</button>
-					{activeEditor.kind !== 'other' && <button className="showcase-editor-apply" type="button" disabled={editorLoading || !!editorError || editorFiles.filter(Boolean).length !== (imageInputMode === 'separate' || imageInputMode === 'public' ? editorPanelCount : 1)} onClick={() => void applyEditorChanges()}>{editorLoading ? 'Preparing...' : 'Apply to preview'}</button>}
+					{activeEditor.kind !== 'other' && <button className="showcase-editor-apply" type="button" disabled={editorLoading || !!editorError || editorFiles.filter(Boolean).length !== expectedEditorFiles} onClick={() => void applyEditorChanges()}>{editorLoading ? 'Preparing...' : 'Apply to preview'}</button>}
 				</footer>
 			</div>}
 		</dialog>
