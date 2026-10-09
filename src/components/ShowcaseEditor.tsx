@@ -430,6 +430,13 @@ function readBlobDataUrl(blob: Blob): Promise<string> {
 	});
 }
 
+async function prepareWorkshopImageForLongUpload(blob: Blob): Promise<Blob> {
+	const buffer = await blob.arrayBuffer();
+	if (buffer.byteLength === 0) throw new Error('Could not prepare an empty image for Workshop upload.');
+	new Uint8Array(buffer)[buffer.byteLength - 1] = 0x21;
+	return new Blob([buffer], { type: blob.type });
+}
+
 async function encodeAnimatedMosaic(file: File, mosaic: NonNullable<ArtworkMosaic['animated']>): Promise<string[]> {
 	const parsed = parseGIF(await file.arrayBuffer());
 	const frames = decompressFrames(parsed, true);
@@ -931,7 +938,13 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			for (const file of files) {
 				const response = await fetch(file.url);
 				if (!response.ok) throw new Error(`Could not read ${file.name}.`);
-				folder.file(file.name, await response.blob());
+				const blob = await response.blob();
+				folder.file(
+					file.name,
+					entry.kind === 'workshop'
+						? await prepareWorkshopImageForLongUpload(blob)
+						: blob,
+				);
 			}
 		}
 		const blob = await archive.generateAsync({ type: 'blob' });
