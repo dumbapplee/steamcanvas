@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowUpRight, Check, CircleHelp, Coffee, Download, ExternalLink, Github, LoaderCircle, PanelsTopLeft, RotateCcw, Search, ShieldCheck } from 'lucide-react';
+import { ArrowUpRight, Check, CircleHelp, Coffee, Download, ExternalLink, Github, LoaderCircle, PanelsTopLeft, Pause, Play, RotateCcw, Search, ShieldCheck } from 'lucide-react';
 import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './components/AvatarEditor';
 import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFramePicker';
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
@@ -14,6 +14,21 @@ type ProfilePreview = {
   avatar?: string;
   level?: number;
 };
+
+const mosaicLayouts = [
+  {
+    columns: '1.4fr 1fr .8fr',
+    order: ['a', 'b', 'c', 'd', 'e', 'f'],
+  },
+  {
+    columns: '.8fr 1.4fr 1fr',
+    order: ['b', 'c', 'a', 'e', 'f', 'd'],
+  },
+  {
+    columns: '1fr .8fr 1.4fr',
+    order: ['c', 'a', 'b', 'f', 'd', 'e'],
+  },
+];
 
 type ProjectDraft = {
   format: 'steamcanvas-project';
@@ -137,6 +152,10 @@ function isProjectDraft(value: unknown): value is ProjectDraft {
 }
 
 export default function App() {
+  const [motionEnabled, setMotionEnabled] = useState(
+    () => typeof window === 'undefined' || !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  );
+  const [motionLayout, setMotionLayout] = useState(0);
   const [identifier, setIdentifier] = useState('');
   const [profile, setProfile] = useState<ProfilePreview | null>(null);
   const [error, setError] = useState('');
@@ -165,6 +184,24 @@ export default function App() {
   const sourceAvatarFrame = useRef<HTMLElement | null>(null);
   const sourceBodyClass = useRef('');
   const sourceThemeVariables = useRef<Record<string, { value: string; priority: string }>>({});
+
+  useEffect(() => {
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const syncMotionPreference = () => setMotionEnabled(!reducedMotion.matches);
+    reducedMotion.addEventListener('change', syncMotionPreference);
+    return () => reducedMotion.removeEventListener('change', syncMotionPreference);
+  }, []);
+
+  useEffect(() => {
+    if (!motionEnabled) return;
+
+    const timer = window.setInterval(
+      () => setMotionLayout((layout) => (layout + 1) % mosaicLayouts.length),
+      2400,
+    );
+
+    return () => window.clearInterval(timer);
+  }, [motionEnabled]);
 
   const themeVariableNames = [
     '--gradient-right', '--gradient-left', '--gradient-background', '--gradient-background-right',
@@ -495,18 +532,18 @@ export default function App() {
       {!profile ? (
         <section className={`entry-screen${loading ? ' is-loading' : ''}`} aria-label="Load a Steam profile">
           <div className="entry-copy">
-            <div className="entry-overline"><span className="entry-overline-dot" /> STEAMCANVAS <span>PROFILE STUDIO / 01</span></div>
-            <h1>Bring your Steam<br />profile <em>into view.</em></h1>
-            <p className="entry-description">A live profile preview, with room to try new looks and make every detail yours.</p>
+            <div className="entry-overline"><span className="entry-overline-dot" /> A LITTLE STUDIO FOR YOUR STEAM PROFILE</div>
+            <h1>Your profile.<br /><em>Your style.</em></h1>
+            <p className="entry-description">Switch up the avatar, art, colours and showcases. See what feels right on your real profile before you change a thing.</p>
             <form className="entry-form" onSubmit={loadProfile}>
-              <label htmlFor="steam-identifier">Start with your Steam profile</label>
+              <label htmlFor="steam-identifier">Start with a public profile</label>
               <div className={`entry-input${error ? ' has-error' : ''}`}>
                 <Search size={19} aria-hidden="true" />
                 <input
                   id="steam-identifier"
                   value={identifier}
                   onChange={(event) => { identifierRef.current = event.target.value; setIdentifier(event.target.value); }}
-                  placeholder="Paste a profile URL or SteamID"
+                  placeholder="Profile URL, custom name or SteamID64"
                   autoComplete="url"
                   spellCheck={false}
                   autoFocus
@@ -519,51 +556,66 @@ export default function App() {
             </form>
             <div className="entry-actions">
               {savedDraft && <button className="entry-resume" type="button" onClick={() => void loadProfileByIdentifier(savedDraft.profileIdentifier, savedDraft)} disabled={loading}><PanelsTopLeft size={15} /> Resume saved draft</button>}
-              {loading && <span className="entry-loading"><LoaderCircle className="spin" size={13} /> FETCHING PROFILE</span>}
+              {loading && <span className="entry-loading"><LoaderCircle className="spin" size={13} /> Fetching profile</span>}
             </div>
-            <div className="entry-footnote"><span>YOUR WORKSPACE</span><span>BUILT AROUND YOUR PROFILE</span></div>
           </div>
 
-          <div className="entry-visual" aria-hidden="true">
-            <div className="entry-visual-caption"><span>STEAM COMMUNITY / PROFILE</span><span className="entry-caption-mark">PUBLIC VIEW</span></div>
-            <div className="entry-floating-level"><span>LVL</span><b>42</b><i /></div>
-            <div className="entry-profile-card">
-              <div className="entry-community-nav"><span className="entry-steam-logo"><i /><b>STEAM</b></span><div><span>STORE</span><strong>COMMUNITY</strong><span>ABOUT</span><span>SUPPORT</span></div><small>INSTALL STEAM &nbsp; sign in</small></div>
-              <div className="entry-profile-hero">
-                <div className="entry-profile-avatar"><i /></div>
-                <div className="entry-profile-name"><strong>Player Name</strong><span>online · playing something great</span></div>
-                <div className="entry-profile-level"><span>Level</span><b>42</b></div>
-                <div className="entry-profile-badge"><i>★</i><span><b>Community Leader</b><small>218 XP</small></span></div>
-              </div>
-              <div className="entry-profile-columns">
-                <section className="entry-activity">
-                  <div className="entry-section-heading"><span>Recent Activity</span><small>2.7 hours past 2 weeks</small></div>
-                  <div className="entry-game-card">
-                    <div className="entry-game-art entry-game-art-one"><i /><b>GAME<br />01</b></div>
-                    <div className="entry-game-info"><strong>Counter-Strike 2</strong><small>849 hrs on record<br />last played recently</small></div>
-                    <div className="entry-achievements"><span>Achievement Progress <small>1 of 1</small></span><i><b /></i></div>
-                  </div>
-                  <div className="entry-game-card">
-                    <div className="entry-game-art entry-game-art-two"><i /><b>GAME<br />02</b></div>
-                    <div className="entry-game-info"><strong>Adventure Awaits</strong><small>41 hrs on record<br />last played this week</small></div>
-                    <div className="entry-achievements"><span>Achievement Progress <small>7 of 47</small></span><i><b /></i></div>
-                  </div>
-                  <div className="entry-game-card entry-game-card-third">
-                    <div className="entry-game-art entry-game-art-three"><i /><b>GAME<br />03</b></div>
-                    <div className="entry-game-info"><strong>Racing Legends</strong><small>17.9 hrs on record</small></div>
-                  </div>
-                </section>
-                <aside className="entry-profile-sidebar">
-                  <div className="entry-offline-status">Currently Offline</div>
-                  <div className="entry-profile-stats"><span>Badges <b>5</b></span><div className="entry-badges"><i>✦</i><i>25</i><i>10</i><i>★</i></div></div>
-                  <div className="entry-profile-stats"><span>Games <b>34</b></span></div>
-                  <div className="entry-profile-stats"><span>Inventory</span></div>
-                  <div className="entry-profile-stats"><span>Groups <b>74</b></span><div className="entry-group"><i>B</i><span><b>Bulls' Academy</b><small>2 Members</small></span></div></div>
-                </aside>
-              </div>
-              <div className="entry-steam-footer"><span>＋ &nbsp; ADD A GAME...</span><span>VIEW FRIENDS LIST &nbsp; · &nbsp; 0 Online</span></div>
+          <aside className="entry-tools" aria-label="Profile editor features">
+            <div className="entry-tools-heading">
+              <span>The toolkit</span>
+              <button
+                className="entry-motion-toggle"
+                type="button"
+                aria-label={motionEnabled ? 'Pause shape animation' : 'Play shape animation'}
+                aria-pressed={motionEnabled}
+                onClick={() => setMotionEnabled((enabled) => !enabled)}
+              >
+                {motionEnabled ? <Pause size={12} /> : <Play size={12} />}
+                {motionEnabled ? 'Pause motion' : 'Play motion'}
+              </button>
             </div>
-          </div>
+            <div className="entry-tools-intro">
+              <strong>One small tweak.<br />A whole new vibe.</strong>
+              <span>Play with the details until they feel right.</span>
+            </div>
+            <div className={`entry-motion${motionEnabled ? ' is-playing' : ''}`} aria-hidden="true">
+              <div
+                className="motion-stage"
+                style={{ gridTemplateColumns: mosaicLayouts[motionLayout].columns }}
+              >
+                {mosaicLayouts[motionLayout].order.map((piece) => (
+                  <span
+                    className={`mosaic-piece piece-${piece}`}
+                    data-piece={piece}
+                    key={piece}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="entry-tools-list">
+              <div className="entry-tool">
+                <span className="entry-tool-index">01</span>
+                <span className="entry-tool-copy"><strong>Avatar &amp; frame</strong><small>Get the crop and frame in sync</small></span>
+                <span className="entry-tool-mark entry-tool-avatar" aria-hidden="true" />
+              </div>
+              <div className="entry-tool">
+                <span className="entry-tool-index">02</span>
+                <span className="entry-tool-copy"><strong>Profile theme</strong><small>Pick a colour mood for your page</small></span>
+                <span className="entry-tool-swatches" aria-hidden="true"><i /><i /><i /></span>
+              </div>
+              <div className="entry-tool">
+                <span className="entry-tool-index">03</span>
+                <span className="entry-tool-copy"><strong>Background</strong><small>Find art that pulls it all together</small></span>
+                <span className="entry-tool-mark entry-tool-background" aria-hidden="true" />
+              </div>
+              <div className="entry-tool">
+                <span className="entry-tool-index">04</span>
+                <span className="entry-tool-copy"><strong>Showcases</strong><small>Split one image across showcase panels</small></span>
+                <span className="entry-tool-mark entry-tool-showcases" aria-hidden="true"><i /><i /><i /></span>
+              </div>
+            </div>
+            <div className="entry-tools-note"><ShieldCheck size={15} /> Try it on here first. Your Steam profile stays as it is.</div>
+          </aside>
         </section>
       ) : (
       <section className="workspace workspace-arrive">
@@ -588,7 +640,7 @@ export default function App() {
           </form>
 
           <div className="source-block">
-            <span className="source-label">CURRENT SOURCE</span>
+            <span className="source-label">Current source</span>
             {profile ? (
               <>
                 <div className="source-identity">
@@ -610,20 +662,20 @@ export default function App() {
               <ProfileThemePicker value={profileTheme} onApply={setProfileTheme} />
               <BackgroundPicker sourceBackgroundImage={sourceBackgroundImage} value={background} onChange={setBackground} />
               <section className="showcase-add-section" aria-label="Showcases">
-                <span className="source-label">SHOWCASES</span>
+                <span className="source-label">Showcases</span>
                 <div className="showcase-add-slot" ref={setShowcaseAddTarget} />
               </section>
             </>
           )}
 
           <div className="privacy-note"><ShieldCheck size={15} /><span>Only public profile pages are fetched. Private content stays private.</span></div>
-          <div className="panel-index">STEAMCANVAS <span>PROFILE PREVIEW</span></div>
+          <div className="panel-index">steamcanvas</div>
         </aside>
 
         <section className="preview-area" aria-label="Steam profile preview">
           <div className="preview-toolbar">
             <div className="preview-title"><span className={`live-dot ${profile ? 'is-live' : ''}`} />
-              <span>{profile ? 'PROFILE PREVIEW' : 'PREVIEW CANVAS'}</span>
+              <span>{profile ? 'Profile preview' : 'Preview'}</span>
             </div>
             <div className="preview-toolbar-actions">
               <span className="draft-status" role="status" aria-live="polite">{projectStatus === 'Draft saved locally' && <Check size={13} />}{projectStatus}</span>
@@ -676,16 +728,11 @@ export default function App() {
               />
             ) : (
               <div className="empty-canvas">
-                <div className="empty-art" aria-hidden="true">
-                  <div className="art-window"><div className="art-topline"><i /><i /><i /></div><div className="art-avatar" /><div className="art-lines"><i /><i /><i /></div></div>
-                </div>
-                <span className="empty-kicker">YOUR CANVAS IS READY</span>
-                <h2>A profile, in its<br /><em>own element.</em></h2>
-                <p>Enter a public Steam profile to bring its live layout into view.</p>
-                <div className="empty-coordinate">45° 26′ 11.8″ N <span>/</span> 12° 20′ 05.4″ E</div>
+                <h2>No profile loaded</h2>
+                <p>Enter a public Steam profile on the left to see its layout here.</p>
               </div>
             )}
-            {loading && <div className="loading-cover"><LoaderCircle className="spin" size={24} /><span>FETCHING PUBLIC PROFILE</span></div>}
+            {loading && <div className="loading-cover"><LoaderCircle className="spin" size={24} /><span>Fetching profile?</span></div>}
                 <ShowcaseEditor
                   previewDocument={showcaseDocument}
                   profileUrl={profile?.url || ''}

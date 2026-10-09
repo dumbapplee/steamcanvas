@@ -1552,10 +1552,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		const left = addDrawerLeft ?? Math.max(12, Math.min(rect.right + 10, globalThis.innerWidth - menuWidth - 12));
 		const top = addDrawerTop ?? Math.max(12, Math.min(rect.top - 5, globalThis.innerHeight - 350));
 		const options: Array<{ kind: CreatableShowcaseKind; title: string; description: string; icon: typeof ImagePlus }> = [
-			{ kind: 'artwork', title: 'Artwork showcase', description: 'Compose a main image with side panels', icon: ImagePlus },
+			{ kind: 'artwork', title: 'Artwork showcase', description: 'Split one image into Steam showcase panels', icon: ImagePlus },
 			{ kind: 'featured-artwork', title: 'Featured artwork', description: 'One large image as the centrepiece', icon: Star },
 			{ kind: 'screenshot', title: 'Screenshot showcase', description: 'Choose from this profile or upload art', icon: Camera },
-			{ kind: 'workshop', title: 'Workshop showcase', description: 'A row of five artwork panels', icon: Hammer },
+			{ kind: 'workshop', title: 'Workshop showcase', description: 'Split one image across five Workshop slots', icon: Hammer },
 		];
 		return <>
 			{createPortal(
@@ -1667,7 +1667,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 								<ImagePlus size={19} />
 								<span>
 									<strong>{editorFiles.filter(Boolean).length ? imageInputMode === 'separate' || imageInputMode === 'public' ? `${editorFiles.filter(Boolean).length} of ${editorPanelCount} panels ready` : sourceName(editorFiles[0] as EditorSource) : editorPanelCount > 1 ? 'Drop one image or choose ready-made panels' : 'Drop or choose an image'}</strong>
-									<small>{editorPanelCount > 1 ? `One image is split automatically. Or select ${editorPanelCount} files in preview order.` : 'Image or animated GIF'}</small>
+									<small>{editorPanelCount > 1 ? activeEditor.kind === 'workshop' ? 'One image is split across all five Workshop slots.' : `One image is split to fit this Steam layout. Or select ${editorPanelCount} separate panels.` : 'Image or animated GIF'}</small>
 									{(imageInputMode === 'separate' || imageInputMode === 'public') && editorFiles.filter(Boolean).length > 0 && <small className="showcase-editor-file-list">{editorFiles.filter((file): file is EditorSource => !!file).map(sourceName).join(' · ')}</small>}
 								</span>
 								<input type="file" multiple={editorPanelCount > 1} accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" onChange={selectShowcaseFiles} />
