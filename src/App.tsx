@@ -674,7 +674,7 @@ export default function App() {
           <div className="preview-toolbar">
             <div className="preview-toolbar-actions" role="group" aria-label="Preview actions">
               <span className="draft-status" role="status" aria-live="polite">{projectStatus === 'Draft saved locally' && <Check size={13} />}{projectStatus}</span>
-              {profile && <button className="project-action" type="button" onClick={resetProfilePreview} disabled={!previewLoaded || loading} title="Discard all preview changes and restore the loaded profile"><RotateCcw size={14} />Reset</button>}
+              {profile && <button className="project-action project-reset-action" type="button" onClick={resetProfilePreview} disabled={!previewLoaded || loading} title="Discard all preview changes and restore the loaded profile"><RotateCcw size={14} />Reset</button>}
               <button className="project-action" type="button" onClick={() => void exportProject()} disabled={!profile || !previewLoaded} title="Download uploaded showcase artwork as ZIP"><Download size={14} />Export</button>
               {profile && <a className="open-source" href={profile.url} target="_blank" rel="noreferrer">Open on Steam <ExternalLink size={13} /></a>}
             </div>
