@@ -1497,8 +1497,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 
 	const buttonStyle: CSSProperties = {
 		minHeight: '30px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '0 9px',
-		border: '1px solid rgba(220,225,228,.35)', borderRadius: '3px', background: 'rgba(18,25,31,.94)',
-		color: '#f2f4f3', cursor: 'pointer', font: '12px Arial,sans-serif', whiteSpace: 'nowrap',
+		border: '1px solid rgba(167,139,250,.38)', borderRadius: '3px', background: 'rgba(29,24,38,.96)',
+		color: '#f2eff8', cursor: 'pointer', font: '12px Arial,sans-serif', whiteSpace: 'nowrap',
 	};
 	const screenshotPreviewHeight = Math.max(1, Math.round(506 * (editorPreview[0]?.height || 284) / (editorPreview[0]?.width || 506)));
 	const previewPanelSize = (index: number) => activeEditor?.kind === 'screenshot'

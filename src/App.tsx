@@ -668,16 +668,11 @@ export default function App() {
             </>
           )}
 
-          <div className="privacy-note"><ShieldCheck size={15} /><span>Only public profile pages are fetched. Private content stays private.</span></div>
-          <div className="panel-index">steamcanvas</div>
         </aside>
 
         <section className="preview-area" aria-label="Steam profile preview">
           <div className="preview-toolbar">
-            <div className="preview-title"><span className={`live-dot ${profile ? 'is-live' : ''}`} />
-              <span>{profile ? 'Profile preview' : 'Preview'}</span>
-            </div>
-            <div className="preview-toolbar-actions">
+            <div className="preview-toolbar-actions" role="group" aria-label="Preview actions">
               <span className="draft-status" role="status" aria-live="polite">{projectStatus === 'Draft saved locally' && <Check size={13} />}{projectStatus}</span>
               {profile && <button className="project-action" type="button" onClick={resetProfilePreview} disabled={!previewLoaded || loading} title="Discard all preview changes and restore the loaded profile"><RotateCcw size={14} />Reset</button>}
               <button className="project-action" type="button" onClick={() => void exportProject()} disabled={!profile || !previewLoaded} title="Download uploaded showcase artwork as ZIP"><Download size={14} />Export</button>
