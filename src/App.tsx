@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowUpRight, Check, CircleHelp, Coffee, Download, ExternalLink, Github, LoaderCircle, PanelsTopLeft, Pause, Play, RotateCcw, Search, ShieldCheck } from 'lucide-react';
+import { ArrowUpRight, Check, CircleHelp, Coffee, Download, ExternalLink, Github, History, LoaderCircle, PanelsTopLeft, Pause, Play, RotateCcw, Search, ShieldCheck, X } from 'lucide-react';
 import AvatarEditor, { DEFAULT_AVATAR_EDIT, type AvatarEditState } from './components/AvatarEditor';
 import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFramePicker';
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
@@ -49,6 +49,59 @@ const projectDatabaseName = 'steamcanvas-projects';
 const projectStoreName = 'drafts';
 const autosaveKey = 'autosave';
 let projectDatabase: Promise<IDBDatabase> | null = null;
+
+const changelogEntries = [
+  {
+    date: '2026-10-09',
+    displayDate: 'October 9, 2026',
+    category: 'WORKSHOP',
+    title: 'More room for Workshop artwork',
+    details: [
+      'Choose the default 1 × 5 layout or use an upgraded 2 × 5 showcase with one image per row.',
+      'Export Workshop images ready for Steam upload, plus a local HTML preview with linked image assets.',
+    ],
+  },
+  {
+    date: '2026-10-08',
+    displayDate: 'October 8, 2026',
+    category: 'PROFILE CUSTOMIZATION',
+    title: 'More profile styles to explore',
+    details: [
+      'Browse Steam profile themes, avatar frames, and animated backgrounds.',
+      'Catalog loading, caching, and retry handling make large Steam collections easier to explore.',
+    ],
+  },
+  {
+    date: '2026-10-02',
+    displayDate: 'October 2, 2026',
+    category: 'PREVIEW RELIABILITY',
+    title: 'Smoother profile previews',
+    details: [
+      'Preview animated profile backgrounds without video controls covering the artwork.',
+      'Steam requests use throttling and retry handling to cope better with rate limits.',
+    ],
+  },
+  {
+    date: '2026-10-01',
+    displayDate: 'October 1, 2026',
+    category: 'SHOWCASE EDITOR',
+    title: 'Arrange, edit, and restore showcases',
+    details: [
+      'Add, reorder, remove, and restore Artwork, Featured Artwork, Screenshot, and Workshop showcases.',
+      'Split artwork into Steam-sized panels, choose public screenshots, and download showcase assets as ZIPs.',
+    ],
+  },
+  {
+    date: '2026-09-30',
+    displayDate: 'September 30, 2026',
+    category: 'THE FIRST PREVIEW',
+    title: 'Start with a public Steam profile',
+    details: [
+      'Load a profile by custom URL, SteamID64, or profile link and preview changes before making them.',
+      'Try avatar and background changes in SteamCanvas; the preview does not modify your Steam account.',
+    ],
+  },
+] as const;
 
 function openProjectDatabase(): Promise<IDBDatabase> {
   if (!projectDatabase) {
@@ -176,6 +229,7 @@ export default function App() {
   const [projectStatus, setProjectStatus] = useState('Autosave ready');
   const [savedDraft, setSavedDraft] = useState<ProjectDraft | null>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
+  const changelogDialog = useRef<HTMLDialogElement>(null);
   const exportAssetsRef = useRef<(() => Promise<void>) | null>(null);
   const pendingDraft = useRef<ProjectDraft | null>(null);
   const identifierRef = useRef('');
@@ -523,7 +577,8 @@ export default function App() {
           </a>
           <a className="author-credit" href="https://github.com/dumbapplee" target="_blank" rel="noreferrer">by dumbapplee</a>
         </div>
-        <nav className="topbar-actions" aria-label="Project links">
+        <nav className="topbar-actions" aria-label="Site navigation">
+          <button className="topbar-link changelog-trigger" type="button" aria-label="Open changelog" aria-haspopup="dialog" onClick={() => changelogDialog.current?.showModal()}><History size={15} /><span>Changelog</span></button>
           <a className="topbar-link" href="https://github.com/dumbapplee/steamcanvas" target="_blank" rel="noreferrer"><Github size={15} /> GitHub <ExternalLink size={12} /></a>
           <a className="topbar-link" href="https://buymeacoffee.com/migueelss" target="_blank" rel="noreferrer"><Coffee size={15} /> Support me <ExternalLink size={12} /></a>
         </nav>
@@ -742,6 +797,31 @@ export default function App() {
         </section>
       </section>
       )}
+      <dialog
+        ref={changelogDialog}
+        className="changelog-dialog"
+        aria-labelledby="changelog-title"
+        onClick={(event) => { if (event.target === event.currentTarget) changelogDialog.current?.close(); }}
+      >
+        <section className="changelog-content">
+          <header className="changelog-header">
+            <div>
+              <span className="changelog-kicker">STEAMCANVAS · CHANGELOG</span>
+              <h2 id="changelog-title">What’s been happening</h2>
+              <p>A short history of what’s been added to the profile studio.</p>
+            </div>
+            <button className="icon-button changelog-close" type="button" aria-label="Close changelog" onClick={() => changelogDialog.current?.close()}><X size={17} /></button>
+          </header>
+          <div className="changelog-list">
+            {changelogEntries.map((entry) => <article className="changelog-entry" key={entry.date}>
+              <div className="changelog-entry-meta"><time dateTime={entry.date}>{entry.displayDate}</time><span>{entry.category}</span></div>
+              <h3>{entry.title}</h3>
+              <ul>{entry.details.map((detail) => <li key={detail}>{detail}</li>)}</ul>
+            </article>)}
+          </div>
+          <footer className="changelog-footer">A retrospective of SteamCanvas updates, based on the project history.</footer>
+        </section>
+      </dialog>
     </main>
   );
 }

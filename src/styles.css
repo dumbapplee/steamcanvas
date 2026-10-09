@@ -1223,6 +1223,34 @@ body { background: #100e16; color: #eeeaf6; }
   .entry-copy { width: min(100%, 900px); }
   .entry-copy h1 { font-size: clamp(88px, 6.2vw, 142px); }
   .entry-description { max-width: 650px; font-size: 18px; }
+}
+.topbar-link.changelog-trigger { appearance: none; background: transparent; cursor: pointer; font-family: inherit; }
+.topbar-link.changelog-trigger:focus-visible { outline: 2px solid #c1a9ff; outline-offset: 3px; }
+.changelog-dialog { width: min(720px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); padding: 0; overflow: auto; border: 1px solid #40364e; border-radius: 7px; background: #17141e; color: #eeeaf6; box-shadow: 0 24px 90px rgb(0 0 0 / 48%); }
+.changelog-dialog::backdrop { background: rgb(2 7 11 / 82%); backdrop-filter: blur(5px); }
+.changelog-content { padding: 25px 30px 18px; }
+.changelog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 19px; border-bottom: 1px solid #342d40; }
+.changelog-kicker { color: #b59aff; font: 10px var(--mono); letter-spacing: .12em; }
+.changelog-header h2 { margin: 9px 0 5px; color: #f3eff8; font-size: 25px; font-weight: 600; letter-spacing: -.03em; }
+.changelog-header p { margin: 0; color: #a49aaf; font-size: 12px; line-height: 1.5; }
+.changelog-close { flex: 0 0 auto; border-color: #40364e; background: #211c29; color: #d9d1e5; }
+.changelog-close:hover { border-color: #a78bfa; background: #2a2236; }
+.changelog-list { display: grid; gap: 0; padding: 20px 0 0 5px; }
+.changelog-entry { position: relative; margin-left: 6px; padding: 0 0 23px 20px; border-left: 1px solid #40364e; }
+.changelog-entry:last-child { padding-bottom: 8px; border-left-color: transparent; }
+.changelog-entry::before { position: absolute; top: 3px; left: -5px; width: 9px; height: 9px; border: 2px solid #17141e; border-radius: 50%; background: #a78bfa; box-shadow: 0 0 0 1px #a78bfa; content: ''; }
+.changelog-entry-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; color: #9e93ac; font: 10px var(--mono); }
+.changelog-entry-meta span { padding: 3px 6px; border: 1px solid #40364e; border-radius: 3px; color: #c1a9ff; font-size: 8px; letter-spacing: .08em; }
+.changelog-entry h3 { margin: 8px 0 6px; color: #ece6f4; font-size: 14px; font-weight: 600; }
+.changelog-entry ul { display: grid; gap: 4px; margin: 0; padding-left: 17px; color: #a49aaf; font-size: 11px; line-height: 1.55; }
+.changelog-entry li::marker { color: #a78bfa; }
+.changelog-footer { padding-top: 12px; border-top: 1px solid #342d40; color: #82788f; font: 9px var(--mono); line-height: 1.5; }
+@media (max-width: 500px) {
+  .topbar-link.changelog-trigger { width: 32px; justify-content: center; padding-inline: 0; }
+  .topbar-link.changelog-trigger span { display: none; }
+  .changelog-content { padding: 20px 17px 15px; }
+  .changelog-header h2 { font-size: 22px; }
+  .changelog-entry { padding-left: 14px; }
   .entry-form { max-width: 730px; margin-top: 42px; }
   .entry-input { min-height: 72px; padding-inline: 18px 8px; }
   .entry-input input { font-size: 16px; }

@@ -108,6 +108,46 @@ function getShowcaseImages(element: HTMLElement, kind: ShowcaseKind): HTMLImageE
 	return [...element.querySelectorAll<HTMLImageElement>(selector)];
 }
 
+function getWorkshopShowcaseRows(entry: ShowcaseEntry): WorkshopRows {
+	if (entry.kind !== 'workshop') return 1;
+	const images = getShowcaseImages(entry.element, entry.kind);
+	if (images.length < 10) return 1;
+
+	const savedRows = entry.element.dataset.steamcanvasWorkshopRows;
+	if (savedRows === '1') return 1;
+	if (savedRows === '2') return 2;
+
+	return images.slice(5, 10).some((image) => {
+		const slot = image.closest<HTMLElement>('.workshop_showcase_mutiitem_ctn');
+		const link = slot?.querySelector<HTMLAnchorElement>('a[href]');
+		if (!link) return false;
+		const itemUrl = new URL(link.href, link.ownerDocument.baseURI);
+		return /\/sharedfiles\/filedetails\/?$/i.test(itemUrl.pathname)
+			&& /^\d+$/.test(itemUrl.searchParams.get('id') || '');
+	}) ? 2 : 1;
+}
+
+function setWorkshopShowcaseRows(entry: ShowcaseEntry, rows: WorkshopRows): void {
+	if (entry.kind !== 'workshop') return;
+	getShowcaseImages(entry.element, entry.kind).forEach((image, index) => {
+		const slot = image.closest<HTMLElement>('.workshop_showcase_mutiitem_ctn');
+		if (!slot) return;
+		if (index < rows * 5) {
+			if (slot.dataset.steamcanvasWorkshopHidden === 'true') {
+				slot.style.display = slot.dataset.steamcanvasWorkshopOriginalDisplay || '';
+				delete slot.dataset.steamcanvasWorkshopHidden;
+				delete slot.dataset.steamcanvasWorkshopOriginalDisplay;
+			}
+			return;
+		}
+		if (slot.dataset.steamcanvasWorkshopHidden !== 'true') {
+			slot.dataset.steamcanvasWorkshopOriginalDisplay = slot.style.display;
+			slot.dataset.steamcanvasWorkshopHidden = 'true';
+		}
+		slot.style.display = 'none';
+	});
+}
+
 function readUploadedAssets(element: HTMLElement, kind: ShowcaseKind, title: string): Array<{ name: string; url: string }> {
 	const baseName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'showcase-artwork';
 	return getShowcaseImages(element, kind)
@@ -1283,11 +1323,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		const publicSelection = entry.element.dataset.steamcanvasPublicScreenshotData ? JSON.parse(entry.element.dataset.steamcanvasPublicScreenshotData) as PublicScreenshot[] : [];
 		const publicSelectionIds = publicSelection.map((item) => item.id);
 		const savedLayout = publicSelectionIds.length || entry.element.dataset.steamcanvasMosaicPanels === '4' ? 'main-three-side' : 'main-side';
-		const savedWorkshopRows: WorkshopRows = entry.kind === 'workshop'
-			&& entry.element.dataset.steamcanvasWorkshopRows === '2'
-			&& entry.element.querySelectorAll('.myworkshop_showcase .workshop_showcase_item_image').length >= 10
-			? 2
-			: 1;
+		const savedWorkshopRows = getWorkshopShowcaseRows(entry);
 		setArtworkLayout(savedLayout);
 		setWorkshopRows(savedWorkshopRows);
 		const panelCount = getMosaicPanelCount(entry.kind, savedLayout, savedWorkshopRows);
@@ -1559,7 +1595,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 					image.style.transformOrigin = 'top left';
 				}
 			}
-			if (entry.kind === 'workshop') entry.element.dataset.steamcanvasWorkshopRows = String(workshopRows);
+			if (entry.kind === 'workshop') {
+				setWorkshopShowcaseRows(entry, workshopRows);
+				entry.element.dataset.steamcanvasWorkshopRows = String(workshopRows);
+			}
 			if (hasTwoPanelImageEditor(entry.kind)) {
 				const sideSlots = [...entry.element.querySelectorAll<HTMLElement>('.screenshot_showcase_smallscreenshot.showcase_slot')];
 				const panelCount = getMosaicPanelCount(entry.kind, artworkLayout);
