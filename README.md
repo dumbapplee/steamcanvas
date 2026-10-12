@@ -75,7 +75,9 @@ The build checks both TypeScript projects and creates the frontend in `dist/`. T
 
 ### Optional catalog database
 
-SteamCanvas works without a database. Set `DATABASE_URL` for the server to enable its PostgreSQL-backed catalog indexing; without it, Points Shop catalog searches use Steam's fallback. The local development setup does not require PostgreSQL.
+SteamCanvas works without a database. Set `DATABASE_URL` for the server to enable its PostgreSQL-backed catalog indexing and global unique-profile metric; without it, Points Shop catalog searches use Steam's fallback and profile metrics are unavailable. The local development setup does not require PostgreSQL.
+
+After a public profile loads successfully, SteamCanvas stores its SteamID64 once in PostgreSQL. The total number of distinct profiles seen by this server is available from `GET /api/profile-metrics` as `{ "uniqueProfiles": 123 }`. No profile names or submitted profile URLs are stored for this metric.
 
 ## 🧭 A quick tour
 

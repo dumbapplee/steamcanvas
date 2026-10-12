@@ -367,6 +367,24 @@ async function fetchPointShopPage(category: CatalogCategory, cursor?: string): P
 }
 
 let catalogDbReady: Promise<void> | null = null;
+let profileMetricsDbReady: Promise<void> | null = null;
+
+async function ensureProfileMetricsDatabase(): Promise<void> {
+  if (!catalogPool) throw new Error('DATABASE_URL is not configured.');
+  if (!profileMetricsDbReady) {
+    profileMetricsDbReady = catalogPool.query(`
+      CREATE TABLE IF NOT EXISTS unique_steam_profiles (
+        steamid64 CHAR(17) PRIMARY KEY,
+        first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `).then(() => undefined).catch((error) => {
+      profileMetricsDbReady = null;
+      throw error;
+    });
+  }
+  await profileMetricsDbReady;
+}
+
 async function ensureCatalogDatabase(): Promise<void> {
   if (!catalogPool) throw new Error('DATABASE_URL is not configured.');
   if (!catalogDbReady) {
@@ -1027,6 +1045,19 @@ function makeInertDocument(html: string, pageUrl: string): { html: string; name:
   return { html: $.html(), name, ...(avatar ? { avatar } : {}), ...(level !== undefined ? { level } : {}) };
 }
 
+function extractSteamId64(html: string, pageUrl: string): string | undefined {
+  const urlMatch = pageUrl.match(/\/profiles\/(\d{17})(?:\/|$)/);
+  if (urlMatch) return urlMatch[1];
+
+  const $ = load(html);
+  const canonicalUrl = $('link[rel="canonical"]').attr('href')
+    || $('meta[property="og:url"]').attr('content');
+  const canonicalMatch = canonicalUrl?.match(/\/profiles\/(\d{17})(?:\/|$)/);
+  if (canonicalMatch) return canonicalMatch[1];
+
+  return html.match(/(?:steamid(?:64)?|steam_id(?:64)?)["']?\s*[:=]\s*["'](\d{17})/i)?.[1];
+}
+
 app.post('/api/profile', async (request, response) => {
   let profileUrl: URL;
   try {
@@ -1037,15 +1068,34 @@ app.post('/api/profile', async (request, response) => {
   }
 
   try {
-    const profile = await getCachedCatalog(`profile:${profileUrl.href}`, async () => {
+    const { steamId64, ...profile } = await getCachedCatalog(`profile:${profileUrl.href}`, async () => {
       const result = await getSteamHtmlWithRetry(profileUrl.href, {
         maxAttempts: 6,
         baseDelayMs: 2000,
         maxBackoffMs: 30000,
         maxRetryAfterMs: 30000,
       });
-      return { ...makeInertDocument(result.data, result.responseUrl), url: result.responseUrl };
+      return {
+        ...makeInertDocument(result.data, result.responseUrl),
+        url: result.responseUrl,
+        steamId64: extractSteamId64(result.data, result.responseUrl),
+      };
     }, profileCacheTtlMs);
+    if (catalogPool) {
+      try {
+        if (steamId64) {
+          await ensureProfileMetricsDatabase();
+          await catalogPool.query(
+            'INSERT INTO unique_steam_profiles (steamid64) VALUES ($1) ON CONFLICT (steamid64) DO NOTHING',
+            [steamId64],
+          );
+        } else {
+          console.warn(`Could not resolve a SteamID64 for successfully loaded profile: ${profile.url}`);
+        }
+      } catch (error) {
+        console.error('Failed to record the unique Steam profile metric:', error);
+      }
+    }
     response.setHeader('Cache-Control', 'no-store');
     response.json(profile);
   } catch (error) {
@@ -1058,6 +1108,23 @@ app.post('/api/profile', async (request, response) => {
       return;
     }
     response.status(502).json({ error: 'Steam did not return a usable public profile. It may be private or temporarily unavailable.' });
+  }
+});
+
+app.get('/api/profile-metrics', async (_request, response) => {
+  if (!catalogPool) {
+    response.status(503).json({ error: 'Profile metrics require DATABASE_URL to be configured.' });
+    return;
+  }
+
+  try {
+    await ensureProfileMetricsDatabase();
+    const result = await catalogPool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM unique_steam_profiles');
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ uniqueProfiles: Number(result.rows[0]?.count || 0) });
+  } catch (error) {
+    console.error('Failed to read the unique Steam profile metric:', error);
+    response.status(500).json({ error: 'Could not read profile metrics right now.' });
   }
 });
 
