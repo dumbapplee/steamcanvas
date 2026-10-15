@@ -98,6 +98,7 @@ For details on image handling, Workshop layouts, and export behavior, see [Steam
 ## ℹ️ What to know
 
 - Only **public** Steam profiles can be loaded.
+- AdSense Auto ads load only when the viewport is at least 651px wide. Google controls ad placement, so ads are not guaranteed to appear in the header. Enable Auto ads and configure the desired formats and consent messaging for the site in AdSense.
 - SteamCanvas is a preview and export tool; it does not apply changes to your Steam account. Upload artwork and make profile changes on Steam yourself.
 - Some showcase types are preserved as Steam provided them. Artwork editing is supported for the showcase types listed above; other showcase blocks can remain unchanged while you reorder or remove them.
 - The **2 × 5** Workshop option is available when the loaded showcase has ten slots. A profile with the Steam upgrade can show either one or two rows in the preview.
