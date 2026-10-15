@@ -5,6 +5,7 @@ import AvatarFramePicker, { type SteamAvatarFrame } from './components/AvatarFra
 import BackgroundPicker, { type SteamBackground } from './components/BackgroundPicker';
 import ProfileThemePicker, { type AppliedProfileTheme } from './components/ProfileThemePicker';
 import ShowcaseEditor, { type RemovedShowcase } from './components/ShowcaseEditor';
+import GuidePage, { getGuideForPath } from './components/GuidePage';
 import { ensureShowcaseArea } from './utils/showcaseArea';
 
 type ProfilePreview = {
@@ -567,6 +568,9 @@ export default function App() {
     };
   }, [profile, previewLoaded, showcaseDocument, avatarEdit, avatarFrame, background, profileTheme, previewLevel, removedShowcases]);
 
+  const guide = getGuideForPath(globalThis.location.pathname);
+  if (guide) return <GuidePage guide={guide} />;
+
   return (
     <main className={`app-shell${profile ? ' has-profile' : ''}`}>
       <header className="topbar">
@@ -578,6 +582,7 @@ export default function App() {
           <a className="author-credit" href="https://github.com/dumbapplee" target="_blank" rel="noreferrer">by dumbapplee</a>
         </div>
         <nav className="topbar-actions" aria-label="Site navigation">
+          <a className="topbar-link" href="/guides/featured-artwork">Guides</a>
           <button className="topbar-link changelog-trigger" type="button" aria-label="Open changelog" aria-haspopup="dialog" onClick={() => changelogDialog.current?.showModal()}><History size={15} /><span>Changelog</span></button>
           <a className="topbar-link" href="https://github.com/dumbapplee/steamcanvas" target="_blank" rel="noreferrer"><Github size={15} /> GitHub <ExternalLink size={12} /></a>
           <a className="topbar-link" href="https://buymeacoffee.com/migueelss" target="_blank" rel="noreferrer"><Coffee size={15} /> Support me <ExternalLink size={12} /></a>

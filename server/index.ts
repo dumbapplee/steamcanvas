@@ -2,6 +2,7 @@ import axios from 'axios';
 import { load } from 'cheerio';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
 
@@ -1184,6 +1185,36 @@ app.post('/api/screenshot-image', async (request, response) => {
 });
 
 const clientBuildPath = resolve('dist');
+const guidePageMetadata: Record<string, { title: string; description: string }> = {
+  'featured-artwork': {
+    title: 'Upload long Steam Artwork and Screenshot showcases — SteamCanvas',
+    description: 'Follow the practical Steam upload workflow for long Artwork, Featured Artwork, and Screenshot showcase images.',
+  },
+  'workshop-showcase': {
+    title: 'Upload long Steam Workshop Showcase images — SteamCanvas',
+    description: 'Prepare, export, and upload the individual images required for a long Steam Workshop Showcase.',
+  },
+};
+
+app.get('/guides/:slug', async (request, response, next) => {
+  const metadata = guidePageMetadata[request.params.slug];
+  if (!metadata) {
+    next();
+    return;
+  }
+
+  try {
+    const html = await readFile(resolve(clientBuildPath, 'index.html'), 'utf8');
+    const document = html
+      .replace(/<title>[^<]*<\/title>/, `<title>${metadata.title}</title>`)
+      .replace(/(<meta name="description" content=")[^"]*("\s*\/?>)/, `$1${metadata.description}$2`)
+      .replace('</head>', `<meta property="og:title" content="${metadata.title}" />\n    <meta property="og:description" content="${metadata.description}" />\n  </head>`);
+    response.type('html').send(document);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use(express.static(clientBuildPath));
 app.get(/^(?!\/api(?:\/|$)).*/, (_request, response) => {
   response.sendFile(resolve(clientBuildPath, 'index.html'));
