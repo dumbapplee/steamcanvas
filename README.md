@@ -39,7 +39,7 @@ SteamCanvas is a local-first editor for experimenting with **public Steam profil
 - Split one image into showcase-sized artwork panels, or use separate, ready-made panels.
 - Browse public profile screenshots and place selected images into Screenshot Showcase slots.
 - Preview GIF artwork and export showcase assets together in a ZIP.
-- Use an upgraded Workshop Showcase as **1 × 5** or **2 × 5**. For 2 × 5, use one source image per row or provide ten prepared panels.
+- Use an upgraded Workshop Showcase as **1 × 5**, **2 × 5**, or **3 × 5** when the profile has enough slots. For multi-row layouts, use one source image per row or provide ready-made panels.
 - Export a complete profile-preview ZIP with an `index.html` wired to local copies of uploaded assets.
 
 ### Pick up where you left off
@@ -101,7 +101,7 @@ For details on image handling, Workshop layouts, and export behavior, see [Steam
 - AdSense Auto ads load only when the viewport is at least 651px wide. Google controls ad placement, so ads are not guaranteed to appear in the header. Enable Auto ads and configure the desired formats and consent messaging for the site in AdSense.
 - SteamCanvas is a preview and export tool; it does not apply changes to your Steam account. Upload artwork and make profile changes on Steam yourself.
 - Some showcase types are preserved as Steam provided them. Artwork editing is supported for the showcase types listed above; other showcase blocks can remain unchanged while you reorder or remove them.
-- The **2 × 5** Workshop option is available when the loaded showcase has ten slots. A profile with the Steam upgrade can show either one or two rows in the preview.
+- Workshop layouts are available up to the number of five-slot rows in the loaded showcase: **2 × 5** needs ten slots and **3 × 5** needs fifteen. A profile with the relevant Steam upgrade can preview up to three rows.
 - Steam can rate-limit or temporarily fail to serve profiles and catalog results. Try again later if a request cannot be completed.
 - Exported HTML may need an internet connection for Steam-hosted content that is not included in the ZIP.
 

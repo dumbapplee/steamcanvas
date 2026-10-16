@@ -70,7 +70,7 @@ type ShowcasePointerGesture = {
 
 type ImageInputMode = 'composite' | 'separate' | 'public' | 'workshop-rows';
 type ArtworkLayout = 'main-side' | 'main-three-side';
-type WorkshopRows = 1 | 2;
+type WorkshopRows = 1 | 2 | 3;
 
 function readImageFile(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -116,15 +116,18 @@ function getWorkshopShowcaseRows(entry: ShowcaseEntry): WorkshopRows {
 	const savedRows = entry.element.dataset.steamcanvasWorkshopRows;
 	if (savedRows === '1') return 1;
 	if (savedRows === '2') return 2;
+	if (savedRows === '3' && images.length >= 15) return 3;
 
-	return images.slice(5, 10).some((image) => {
+	const hasPublishedItemInRow = (row: number) => images.slice(row * 5, row * 5 + 5).some((image) => {
 		const slot = image.closest<HTMLElement>('.workshop_showcase_mutiitem_ctn');
 		const link = slot?.querySelector<HTMLAnchorElement>('a[href]');
 		if (!link) return false;
 		const itemUrl = new URL(link.href, link.ownerDocument.baseURI);
 		return /\/sharedfiles\/filedetails\/?$/i.test(itemUrl.pathname)
 			&& /^\d+$/.test(itemUrl.searchParams.get('id') || '');
-	}) ? 2 : 1;
+	});
+	if (images.length >= 15 && hasPublishedItemInRow(2)) return 3;
+	return hasPublishedItemInRow(1) ? 2 : 1;
 }
 
 function setWorkshopShowcaseRows(entry: ShowcaseEntry, rows: WorkshopRows): void {
@@ -469,7 +472,7 @@ async function splitWorkshopMosaic(file: File): Promise<ArtworkMosaic> {
 }
 
 async function splitWorkshopRows(files: File[]): Promise<ArtworkMosaic> {
-	if (files.length !== 2) throw new Error('Choose two images, one for each Workshop row.');
+	if (files.length < 2 || files.length > 3) throw new Error('Choose one image for each Workshop row.');
 	const rows = await Promise.all(files.map(splitWorkshopMosaic));
 	const animatedRows = rows.flatMap((row, index) => row.animated
 		? [{ startIndex: index * 5, file: files[index], mosaic: row.animated }]
@@ -1313,10 +1316,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	const workshopSlotCount = activeEditor?.kind === 'workshop'
 		? activeEditor.element.querySelectorAll('.myworkshop_showcase .workshop_showcase_item_image').length
 		: 0;
-	const canUseDoubleWorkshopRows = workshopSlotCount >= 10;
+	const maxWorkshopRows = Math.min(3, Math.floor(workshopSlotCount / 5));
 	const editorPanelCount = activeEditor ? getMosaicPanelCount(activeEditor.kind, artworkLayout, workshopRows) : 1;
 	const expectedEditorFiles = imageInputMode === 'workshop-rows'
-		? 2
+		? workshopRows
 		: imageInputMode === 'separate' || imageInputMode === 'public' ? editorPanelCount : 1;
 
 	function openEditor(entry: ShowcaseEntry) {
@@ -1422,17 +1425,17 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 
 	function setShowcaseFiles(selected: File[]) {
 		if (!activeEditor) return;
-		const isWorkshopRows = activeEditor.kind === 'workshop' && workshopRows === 2 && selected.length === 2;
+		const isWorkshopRows = activeEditor.kind === 'workshop' && workshopRows > 1 && selected.length === workshopRows;
 		const separate = selected.length === editorPanelCount && editorPanelCount > 1;
 		const mode: ImageInputMode = isWorkshopRows ? 'workshop-rows' : separate ? 'separate' : 'composite';
-		const validSingleImage = selected.length === 1 && !(activeEditor.kind === 'workshop' && workshopRows === 2);
+		const validSingleImage = selected.length === 1 && !(activeEditor.kind === 'workshop' && workshopRows > 1);
 		const validSelection = validSingleImage || separate || isWorkshopRows;
 		if (!validSelection) {
 			setImageInputMode('composite');
 			setEditorFiles([]);
 			setEditorPreview([]);
-			setEditorError(activeEditor.kind === 'workshop' && workshopRows === 2
-				? `Choose two images (one per row) or exactly ${editorPanelCount} ready-made panels.`
+			setEditorError(activeEditor.kind === 'workshop' && workshopRows > 1
+				? `Choose ${workshopRows} images (one per row) or exactly ${editorPanelCount} ready-made panels.`
 				: `Choose one complete image or exactly ${editorPanelCount} separate panels.`);
 			return;
 		}
@@ -1482,11 +1485,11 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			return false;
 		}
 		const panelCount = getMosaicPanelCount(entry.kind, artworkLayout, workshopRows);
-		const workshopRowUploads = mode === 'workshop-rows' && entry.kind === 'workshop' && files.length === 2 && files.every((file) => !isPublicScreenshot(file));
+		const workshopRowUploads = mode === 'workshop-rows' && entry.kind === 'workshop' && workshopRows > 1 && files.length === workshopRows && files.every((file) => !isPublicScreenshot(file));
 		const separateUploads = mode === 'separate' && panelCount > 1 && files.length === panelCount;
 		if (!workshopRowUploads && files.length !== 1 && !separateUploads && mode !== 'public') {
-			setEditorError(entry.kind === 'workshop' && workshopRows === 2
-				? `Choose two images (one per row) or exactly ${panelCount} ready-made panels.`
+			setEditorError(entry.kind === 'workshop' && workshopRows > 1
+				? `Choose ${workshopRows} images (one per row) or exactly ${panelCount} ready-made panels.`
 				: `Choose one complete image or exactly ${panelCount} separate panels.`);
 			return false;
 		}
@@ -1539,7 +1542,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 					reader.readAsDataURL(files[0] as File);
 				})] };
 			if (workshopRowUploads && mosaic.animatedRows?.some((row) => row.mosaic.format === 'apng')) {
-				setEditorError('Two-row Workshop exports support static images and GIFs. Convert APNG files to GIF or use static images.');
+				setEditorError('Multi-row Workshop exports support static images and GIFs. Convert APNG files to GIF or use static images.');
 				return false;
 			}
 			const encodedWorkshopRows = workshopRowUploads
@@ -1860,10 +1863,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							</div>
 						</div>
 						<aside className="showcase-editor-controls">
-							{activeEditor.kind === 'workshop' && canUseDoubleWorkshopRows && <div className="showcase-editor-control-group">
+							{activeEditor.kind === 'workshop' && maxWorkshopRows >= 2 && <div className="showcase-editor-control-group">
 								<span className="showcase-editor-label">LAYOUT</span>
 								<div className="showcase-editor-layout-choice" role="group" aria-label="Workshop showcase layout">
-									{([1, 2] as const).map((rows) => <button key={rows} className={workshopRows === rows ? 'is-active' : ''} type="button" aria-pressed={workshopRows === rows} onClick={() => {
+								{Array.from({ length: maxWorkshopRows }, (_, index) => (index + 1) as WorkshopRows).map((rows) => <button key={rows} className={workshopRows === rows ? 'is-active' : ''} type="button" aria-pressed={workshopRows === rows} onClick={() => {
 										setWorkshopRows(rows);
 										setImageInputMode('composite');
 										setEditorFiles([]);
@@ -1871,7 +1874,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 										setEditorError('');
 									}}>
 										<span className={`showcase-layout-icon is-workshop-${rows}`} aria-hidden="true">{Array.from({ length: rows * 5 }, (_, index) => <i key={index} />)}</span>
-										<span className="showcase-layout-copy"><strong>{rows} × 5</strong><small>{rows === 1 ? 'One image · 5 slots' : 'Two images · 10 slots'}</small></span>
+										<span className="showcase-layout-copy"><strong>{rows} × 5</strong><small>{rows === 1 ? 'One image · 5 slots' : `${rows} images · ${rows * 5} slots`}</small></span>
 									</button>)}
 								</div>
 							</div>}
@@ -1903,9 +1906,9 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							<label className={`showcase-editor-upload ${editorPanelCount > 1 ? 'is-multiple' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setShowcaseFiles([...event.dataTransfer.files]); }}>
 								<ImagePlus size={19} />
 								<span>
-									<strong>{editorFiles.filter(Boolean).length ? imageInputMode === 'workshop-rows' ? `${editorFiles.filter(Boolean).length} row images ready` : imageInputMode === 'separate' || imageInputMode === 'public' ? `${editorFiles.filter(Boolean).length} of ${editorPanelCount} panels ready` : sourceName(editorFiles[0] as EditorSource) : activeEditor.kind === 'workshop' && workshopRows === 2 ? 'Choose two images, one per row' : editorPanelCount > 1 ? 'Drop one image or choose ready-made panels' : 'Drop or choose an image'}</strong>
+									<strong>{editorFiles.filter(Boolean).length ? imageInputMode === 'workshop-rows' ? `${editorFiles.filter(Boolean).length} row images ready` : imageInputMode === 'separate' || imageInputMode === 'public' ? `${editorFiles.filter(Boolean).length} of ${editorPanelCount} panels ready` : sourceName(editorFiles[0] as EditorSource) : activeEditor.kind === 'workshop' && workshopRows > 1 ? `Choose ${workshopRows} images, one per row` : editorPanelCount > 1 ? 'Drop one image or choose ready-made panels' : 'Drop or choose an image'}</strong>
 									<small>{activeEditor.kind === 'workshop'
-										? workshopRows === 2 ? 'Each image is split across five slots. Or select ten ready-made panels.' : 'One image is split across five Workshop slots.'
+										? workshopRows > 1 ? `Each image is split across five slots. Or select ${editorPanelCount} ready-made panels.` : 'One image is split across five Workshop slots.'
 										: editorPanelCount > 1 ? `One image is split to fit this Steam layout. Or select ${editorPanelCount} separate panels.` : 'Image or animated GIF'}</small>
 									{(imageInputMode === 'separate' || imageInputMode === 'public' || imageInputMode === 'workshop-rows') && editorFiles.filter(Boolean).length > 0 && <small className="showcase-editor-file-list">{editorFiles.filter((file): file is EditorSource => !!file).map(sourceName).join(' · ')}</small>}
 								</span>

@@ -61,11 +61,11 @@ const guides: Guide[] = [
     steps: [
       {
         title: 'Confirm the layout and file ownership',
-        body: <>Choose 1 × 5 for five Workshop slots or 2 × 5 for ten slots. Use source artwork or animations that you own and can export. Animated Workshop items also require accepting <a href="https://steamcommunity.com/sharedfiles/workshoplegalagreement" target="_blank" rel="noreferrer">Steam’s Workshop Legal Agreement</a> before an upload is possible.</>,
+        body: <>Choose 1 × 5 for five Workshop slots, 2 × 5 for ten, or 3 × 5 for fifteen slots. Use source artwork or animations that you own and can export. Animated Workshop items also require accepting <a href="https://steamcommunity.com/sharedfiles/workshoplegalagreement" target="_blank" rel="noreferrer">Steam’s Workshop Legal Agreement</a> before an upload is possible.</>,
       },
       {
         title: 'Create the panels in SteamCanvas',
-        body: 'Load the Workshop Showcase editor, add one source image for a 1 × 5 row, or one image per row for 2 × 5. SteamCanvas splits them into five panels per row. You can also provide five or ten panels that have already been prepared.',
+        body: 'Load the Workshop Showcase editor, add one source image for a 1 × 5 row or one image per row for a 2 × 5 or 3 × 5 layout. SteamCanvas splits them into five panels per row. You can also provide five, ten, or fifteen panels that have already been prepared.',
       },
       {
         title: 'Export the upload-ready Workshop ZIP',
@@ -77,7 +77,7 @@ const guides: Guide[] = [
       },
       {
         title: 'Save all panels and assign them to the showcase',
-        body: 'Choose Save and Continue for each image, then add the resulting published Workshop items to the matching profile slots in their left-to-right order. Repeat five times for one row or ten times for two rows, and review the live profile for seams and ordering.',
+        body: 'Choose Save and Continue for each image, then add the resulting published Workshop items to the matching profile slots in their left-to-right order. Repeat five, ten, or fifteen times to fill one, two, or three rows, and review the live profile for seams and ordering.',
       },
     ],
     checklist: [
@@ -85,7 +85,7 @@ const guides: Guide[] = [
       'Steam Workshop Legal Agreement is accepted when uploading animations.',
       'The upload-ready Workshop ZIP, not a preview copy, is being used.',
       'Every panel uses the Community form with app ID 480, file type 0, and visibility 0.',
-      'Five or ten published items were assigned in the correct order.',
+      'Five, ten, or fifteen published items were assigned in the correct order.',
     ],
     sourceUrl: 'https://steamcommunity.com/sharedfiles/filedetails/?id=2174159512',
     sourceLabel: 'Community reference: long Workshop and guide images',
