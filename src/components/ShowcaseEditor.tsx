@@ -70,6 +70,7 @@ type ShowcasePointerGesture = {
 
 type ImageInputMode = 'composite' | 'separate' | 'public' | 'workshop-rows';
 type ArtworkLayout = 'main-side' | 'main-three-side';
+const SIDE_PANEL_GAP = 13;
 type WorkshopRows = 1 | 2 | 3;
 
 function readImageFile(file: File): Promise<string> {
@@ -379,12 +380,15 @@ async function splitArtworkMosaic(file: File, layout: ArtworkLayout = 'main-side
 	const outputMainWidth = Math.max(1, Math.round(compositeWidth * mainWidth / showcaseWidth));
 	const sideWidth = Math.max(1, compositeWidth - outputMainWidth);
 	const sideCount = layout === 'main-three-side' ? 3 : 1;
-	const sideHeightEdges = Array.from({ length: sideCount + 1 }, (_, index) => Math.floor(index * compositeHeight / sideCount));
+	// Steam stacks side tiles with a fixed vertical gap; tiles are cut from the side column skipping those gaps
+	const sideGap = sideCount > 1 ? SIDE_PANEL_GAP : 0;
+	const sideTilesHeight = Math.max(sideCount, compositeHeight - sideGap * (sideCount - 1));
+	const sideHeightEdges = Array.from({ length: sideCount + 1 }, (_, index) => Math.floor(index * sideTilesHeight / sideCount));
 	const panelRegions = [
 		{ x: 0, y: 0, width: outputMainWidth, height: compositeHeight },
 		...Array.from({ length: sideCount }, (_, index) => ({
 			x: outputMainWidth,
-			y: sideHeightEdges[index],
+			y: sideHeightEdges[index] + index * sideGap,
 			width: sideWidth,
 			height: Math.max(1, sideHeightEdges[index + 1] - sideHeightEdges[index]),
 		})),
