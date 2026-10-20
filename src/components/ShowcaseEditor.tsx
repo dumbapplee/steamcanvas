@@ -68,10 +68,11 @@ type ShowcasePointerGesture = {
 	originalUserSelect: string;
 };
 
-type ImageInputMode = 'composite' | 'separate' | 'public' | 'workshop-rows';
+type ImageInputMode = 'composite' | 'separate' | 'public' | 'workshop-rows' | 'workshop-custom';
 type ArtworkLayout = 'main-side' | 'main-three-side';
 const SIDE_PANEL_GAP = 13;
 type WorkshopRows = 1 | 2 | 3;
+type WorkshopUploadTarget = { kind: 'row' | 'panels'; index: number };
 
 function readImageFile(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -204,6 +205,37 @@ function makeImageSlot(document: Document, className: string, maxWidth: number):
 	return slot;
 }
 
+function makeWorkshopSlot(document: Document): HTMLElement {
+	const slot = document.createElement('div');
+	slot.className = 'workshop_showcase_mutiitem_ctn';
+	slot.dataset.steamcanvasEmptySlot = 'true';
+	const innerSlot = document.createElement('div');
+	innerSlot.className = 'workshop_showcase_multiitem showcase_slot';
+	const anchor = document.createElement('a');
+	anchor.className = 'ugc';
+	anchor.href = '#';
+	const image = document.createElement('img');
+	image.className = 'workshop_showcase_item_image';
+	image.alt = '';
+	image.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="126" height="84" viewBox="0 0 126 84"><rect width="126" height="84" fill="#344b5b"/></svg>')}`;
+	anchor.append(image);
+	innerSlot.append(anchor);
+	slot.append(innerSlot);
+	return slot;
+}
+
+// Lets users preview more rows than their showcase has slots for
+function ensureWorkshopSlots(entry: ShowcaseEntry, count: number): void {
+	if (entry.kind !== 'workshop') return;
+	const slots = [...entry.element.querySelectorAll<HTMLElement>('.myworkshop_showcase .workshop_showcase_mutiitem_ctn')];
+	let last = slots[slots.length - 1];
+	for (let index = slots.length; last && index < count; index += 1) {
+		const slot = makeWorkshopSlot(entry.element.ownerDocument);
+		last.after(slot);
+		last = slot;
+	}
+}
+
 function makeArtworkShowcase(document: Document, kind: 'artwork' | 'featured-artwork'): HTMLElement {
 	const featured = kind === 'featured-artwork';
 	const showcase = document.createElement('div');
@@ -318,24 +350,7 @@ function makeWorkshopShowcase(document: Document): HTMLElement {
 	const content = document.createElement('div');
 	content.className = 'myworkshop_showcase';
 
-	for (let index = 0; index < 5; index += 1) {
-		const slot = document.createElement('div');
-		slot.className = 'workshop_showcase_mutiitem_ctn';
-		slot.dataset.steamcanvasEmptySlot = 'true';
-		const innerSlot = document.createElement('div');
-		innerSlot.className = 'workshop_showcase_multiitem showcase_slot';
-		const anchor = document.createElement('a');
-		anchor.className = 'ugc';
-		anchor.href = '#';
-		const image = document.createElement('img');
-		image.className = 'workshop_showcase_item_image';
-		image.alt = '';
-		image.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="126" height="84" viewBox="0 0 126 84"><rect width="126" height="84" fill="#344b5b"/></svg>')}`;
-		anchor.append(image);
-		innerSlot.append(anchor);
-		slot.append(innerSlot);
-		content.append(slot);
-	}
+	for (let index = 0; index < 5; index += 1) content.append(makeWorkshopSlot(document));
 
 	const clear = document.createElement('div');
 	clear.style.clear = 'left';
@@ -677,6 +692,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	const [imageInputMode, setImageInputMode] = useState<ImageInputMode>('composite');
 	const [artworkLayout, setArtworkLayout] = useState<ArtworkLayout>('main-side');
 	const [workshopRows, setWorkshopRows] = useState<WorkshopRows>(1);
+	const [workshopRowFiles, setWorkshopRowFiles] = useState<Array<File | null>>(() => Array(3).fill(null));
+	const [workshopPanelFiles, setWorkshopPanelFiles] = useState<Array<File | null>>(() => Array(15).fill(null));
 	const [editorFiles, setEditorFiles] = useState<Array<EditorSource | null>>([]);
 	const [editorPreview, setEditorPreview] = useState<Array<PreviewPanel | null>>([]);
 	const [editorLoading, setEditorLoading] = useState(false);
@@ -702,6 +719,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	const [exportingShowcaseId, setExportingShowcaseId] = useState<string | null>(null);
 	const [showcaseExportError, setShowcaseExportError] = useState<{ id: string; message: string } | null>(null);
 	const editorDialogRef = useRef<HTMLDialogElement>(null);
+	const workshopFileInputRef = useRef<HTMLInputElement>(null);
+	const workshopUploadTargetRef = useRef<WorkshopUploadTarget | null>(null);
 	const addMenuRef = useRef<HTMLElement>(null);
 	const previewRequestId = useRef(0);
 	const dragTargetRef = useRef<{ id: string | null; after: boolean }>({ id: null, after: false });
@@ -1317,11 +1336,10 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	}
 
 	const activeEditor = entries.find((entry) => entry.id === editingId) || null;
-	const workshopSlotCount = activeEditor?.kind === 'workshop'
-		? activeEditor.element.querySelectorAll('.myworkshop_showcase .workshop_showcase_item_image').length
-		: 0;
-	const maxWorkshopRows = Math.min(3, Math.floor(workshopSlotCount / 5));
+	const maxWorkshopRows = activeEditor?.kind === 'workshop' ? 3 : 0;
 	const editorPanelCount = activeEditor ? getMosaicPanelCount(activeEditor.kind, artworkLayout, workshopRows) : 1;
+	const workshopSelectionCount = workshopRowFiles.slice(0, workshopRows).filter(Boolean).length
+		+ workshopPanelFiles.slice(0, editorPanelCount).filter(Boolean).length;
 	const expectedEditorFiles = imageInputMode === 'workshop-rows'
 		? workshopRows
 		: imageInputMode === 'separate' || imageInputMode === 'public' ? editorPanelCount : 1;
@@ -1333,6 +1351,9 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		const savedWorkshopRows = getWorkshopShowcaseRows(entry);
 		setArtworkLayout(savedLayout);
 		setWorkshopRows(savedWorkshopRows);
+		setWorkshopRowFiles(Array(3).fill(null));
+		setWorkshopPanelFiles(Array(15).fill(null));
+		workshopUploadTargetRef.current = null;
 		const panelCount = getMosaicPanelCount(entry.kind, savedLayout, savedWorkshopRows);
 		const currentImages = [...entry.element.querySelectorAll<HTMLImageElement>(entry.kind === 'workshop'
 			? '.myworkshop_showcase .workshop_showcase_item_image'
@@ -1421,10 +1442,235 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		}
 	}
 
+	function requestWorkshopUpload(target: WorkshopUploadTarget) {
+		workshopUploadTargetRef.current = target;
+		workshopFileInputRef.current?.click();
+	}
+
+	async function selectWorkshopRowFile(rowIndex: number, file: File) {
+		if (!activeEditor || activeEditor.kind !== 'workshop') return;
+		if (!/^image\/(png|jpeg|webp|gif|avif|apng)$/.test(file.type)) {
+			setEditorError('Choose PNG, JPG, WEBP, GIF, APNG, or AVIF images.');
+			return;
+		}
+		const nextRowFiles = [...workshopRowFiles];
+		nextRowFiles[rowIndex] = file;
+		const nextPanelFiles = [...workshopPanelFiles];
+		nextPanelFiles.fill(null, rowIndex * 5, rowIndex * 5 + 5);
+		setWorkshopRowFiles(nextRowFiles);
+		setWorkshopPanelFiles(nextPanelFiles);
+		setEditorFiles([file]);
+		setImageInputMode('workshop-custom');
+		setEditorError('');
+		const requestId = ++previewRequestId.current;
+		setEditorLoading(true);
+		setEditorPreview((current) => {
+			const next = [...current];
+			next.fill(null, rowIndex * 5, rowIndex * 5 + 5);
+			return next;
+		});
+		try {
+			const mosaic = await splitWorkshopMosaic(file);
+			if (previewRequestId.current !== requestId) return;
+			setEditorPreview((current) => {
+				const next = [...current];
+				mosaic.images.forEach((src, index) => {
+					next[rowIndex * 5 + index] = {
+						src: mosaic.previewImages?.[index] || src,
+						...(mosaic.panelDimensions?.[index] || { width: 1, height: 1 }),
+					};
+				});
+				return next;
+			});
+		} catch (caught) {
+			if (previewRequestId.current === requestId) {
+				setEditorError(caught instanceof Error ? caught.message : 'Could not prepare the Workshop row.');
+			}
+		} finally {
+			if (previewRequestId.current === requestId) setEditorLoading(false);
+		}
+	}
+
+	async function selectWorkshopPanels(startIndex: number, selected: File[]) {
+		if (!activeEditor || activeEditor.kind !== 'workshop' || !selected.length) return;
+		const rowIndex = Math.floor(startIndex / 5);
+		const rowEnd = (rowIndex + 1) * 5;
+		if (selected.length > rowEnd - startIndex) {
+			setEditorError(`Choose up to ${rowEnd - startIndex} images, starting at this panel.`);
+			return;
+		}
+		if (selected.some((file) => !/^image\/(png|jpeg|webp|gif|avif|apng)$/.test(file.type))) {
+			setEditorError('Choose PNG, JPG, WEBP, GIF, APNG, or AVIF images.');
+			return;
+		}
+		const rowHadComposite = !!workshopRowFiles[rowIndex];
+		const nextRowFiles = [...workshopRowFiles];
+		nextRowFiles[rowIndex] = null;
+		const nextPanelFiles = [...workshopPanelFiles];
+		if (rowHadComposite) nextPanelFiles.fill(null, rowIndex * 5, rowEnd);
+		selected.forEach((file, index) => { nextPanelFiles[startIndex + index] = file; });
+		setWorkshopRowFiles(nextRowFiles);
+		setWorkshopPanelFiles(nextPanelFiles);
+		setEditorFiles([...nextRowFiles.filter((file): file is File => !!file), ...nextPanelFiles.filter((file): file is File => !!file)]);
+		setImageInputMode('workshop-custom');
+		setEditorError('');
+		const requestId = ++previewRequestId.current;
+		setEditorLoading(true);
+		if (rowHadComposite) {
+			setEditorPreview((current) => {
+				const next = [...current];
+				next.fill(null, rowIndex * 5, rowEnd);
+				return next;
+			});
+		}
+		try {
+			const panels = await Promise.all(selected.map(readPreviewPanel));
+			if (previewRequestId.current !== requestId) return;
+			setEditorPreview((current) => {
+				const next = [...current];
+				panels.forEach((panel, index) => { next[startIndex + index] = panel; });
+				return next;
+			});
+		} catch (caught) {
+			if (previewRequestId.current === requestId) {
+				setEditorError(caught instanceof Error ? caught.message : 'Could not prepare the selected Workshop panels.');
+			}
+		} finally {
+			if (previewRequestId.current === requestId) setEditorLoading(false);
+		}
+	}
+
+	function selectWorkshopFiles(event: ChangeEvent<HTMLInputElement>) {
+		const selected = [...(event.target.files || [])];
+		event.target.value = '';
+		const target = workshopUploadTargetRef.current;
+		workshopUploadTargetRef.current = null;
+		if (!target || !selected.length) return;
+		if (target.kind === 'row') void selectWorkshopRowFile(target.index, selected[0]);
+		else void selectWorkshopPanels(target.index, selected);
+	}
+
 	function selectShowcaseFiles(event: ChangeEvent<HTMLInputElement>) {
 		const selected = [...(event.target.files || [])];
 		event.target.value = '';
 		setShowcaseFiles(selected);
+	}
+
+	async function applyWorkshopSelection(entry: ShowcaseEntry): Promise<boolean> {
+		type WorkshopAsset = {
+			url: string;
+			exportUrl: string;
+			name: string;
+			animation?: { width: number; height: number; x: number; y: number; regionHeight: number };
+			animatedArtwork?: { name: string; url: string };
+		};
+		const assets = new Map<number, WorkshopAsset>();
+		try {
+			for (let row = 0; row < workshopRows; row += 1) {
+				const rowFile = workshopRowFiles[row];
+				if (rowFile) {
+					setEditorProgress(`Preparing row ${row + 1}...`);
+					const mosaic = await splitWorkshopMosaic(rowFile);
+					const baseName = sourceName(rowFile).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || 'steam-workshop';
+					const gifPanels = mosaic.animated?.format === 'gif'
+						? await encodeAnimatedMosaic(rowFile, mosaic.animated)
+						: [];
+					for (let panel = 0; panel < 5; panel += 1) {
+						const index = row * 5 + panel;
+						const region = mosaic.animated
+							? {
+								width: mosaic.animated.width,
+								height: mosaic.animated.height,
+								x: mosaic.animated.panelWidths?.slice(0, panel).reduce((sum, width) => sum + width, 0) || 0,
+								y: 0,
+								regionHeight: mosaic.animated.height,
+							}
+							: undefined;
+						const animatedApng = mosaic.animated?.format === 'apng'
+							? { name: sourceName(rowFile), url: mosaic.images[panel] }
+							: undefined;
+						assets.set(index, {
+							url: mosaic.images[panel],
+							exportUrl: gifPanels[panel] || mosaic.images[panel],
+							name: `${baseName}-${index + 1}.${gifPanels.length ? 'gif' : 'png'}`,
+							...(region ? { animation: region } : {}),
+							...(animatedApng ? { animatedArtwork: animatedApng } : {}),
+						});
+					}
+				}
+				for (let panel = 0; panel < 5; panel += 1) {
+					const index = row * 5 + panel;
+					const file = workshopPanelFiles[index];
+					if (!file) continue;
+					setEditorProgress(`Preparing panel ${index + 1} of ${workshopRows * 5}...`);
+					const url = await readImageFile(file);
+					const baseName = sourceName(file).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || `workshop-panel-${index + 1}`;
+					assets.set(index, {
+						url,
+						exportUrl: url,
+						name: `${baseName}.${getImageExtension(file)}`,
+					});
+				}
+			}
+			if (!assets.size) return false;
+			ensureWorkshopSlots(entry, workshopRows * 5);
+			const images = getShowcaseImages(entry.element, entry.kind);
+			for (const [index, asset] of assets) {
+				const image = images[index];
+				if (!image) continue;
+				const anchor = image.closest<HTMLAnchorElement>('a');
+				image.src = asset.url;
+				image.dataset.steamcanvasArtwork = 'true';
+				image.closest<HTMLElement>('[data-steamcanvas-empty-slot]')?.removeAttribute('data-steamcanvas-empty-slot');
+				anchor?.setAttribute('href', asset.url);
+				image.style.display = 'block';
+				image.style.width = '100%';
+				image.style.maxWidth = '100%';
+				image.style.minHeight = '0';
+				image.style.objectFit = 'fill';
+				image.style.transformOrigin = 'top left';
+				if (asset.animation && anchor) {
+					anchor.style.display = 'block';
+					anchor.style.overflow = 'hidden';
+					anchor.style.height = `${asset.animation.regionHeight}px`;
+					anchor.style.width = '100%';
+					image.style.width = `${asset.animation.width}px`;
+					image.style.height = `${asset.animation.height}px`;
+					image.style.maxWidth = 'none';
+					image.style.transform = asset.animation.x || asset.animation.y
+						? `translate(${-asset.animation.x}px, ${-asset.animation.y}px)`
+						: 'none';
+				} else {
+					image.style.height = 'auto';
+					image.style.transform = 'none';
+					if (anchor) {
+						anchor.style.display = 'block';
+						anchor.style.width = '100%';
+						anchor.style.height = '';
+						anchor.style.overflow = 'hidden';
+					}
+				}
+			}
+			setWorkshopShowcaseRows(entry, workshopRows);
+			entry.element.dataset.steamcanvasWorkshopRows = String(workshopRows);
+			const animatedArtwork = [...assets.values()].find((asset) => asset.animatedArtwork)?.animatedArtwork;
+			setEntries((current) => current.map((item) => {
+				if (item.id !== entry.id) return item;
+				const exportFiles = [...(item.exportFiles || [])];
+				for (const [index, asset] of assets) exportFiles[index] = { name: asset.name, url: asset.exportUrl };
+				return {
+					...item,
+					exportFiles: exportFiles.filter((file): file is { name: string; url: string } => !!file),
+					animatedArtwork,
+				};
+			}));
+			setEditorError('');
+			setError('');
+			return true;
+		} catch (caught) {
+			setEditorError(caught instanceof Error ? caught.message : 'Could not prepare the Workshop panels.');
+			return false;
+		}
 	}
 
 	function setShowcaseFiles(selected: File[]) {
@@ -1470,6 +1716,16 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 
 	async function applyEditorChanges() {
 		if (!activeEditor) return;
+		if (activeEditor.kind === 'workshop' && imageInputMode === 'workshop-custom') {
+			setEditorLoading(true);
+			try {
+				if (await applyWorkshopSelection(activeEditor)) setEditingId(null);
+			} finally {
+				setEditorLoading(false);
+				setEditorProgress('');
+			}
+			return;
+		}
 		const files = editorFiles.filter((file): file is EditorSource => file !== null);
 		if (files.length !== expectedEditorFiles || editorLoading || editorError) return;
 		setEditorLoading(true);
@@ -1506,6 +1762,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				}
 			}
 		}
+		ensureWorkshopSlots(entry, panelCount);
 		const images = getShowcaseImages(entry.element, entry.kind);
 		try {
 			let exportWarning = false;
@@ -1744,7 +2001,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			: Math.max(...previewSizes.map((panel) => panel.height));
 	const previewAspectRatio = previewWidth / Math.max(1, previewHeight);
 	const previewRenderWidth = Math.min(480, 390 * previewAspectRatio);
-	const isAnimatedPreview = (imageInputMode === 'composite' || imageInputMode === 'workshop-rows')
+	const isAnimatedPreview = (imageInputMode === 'composite' || imageInputMode === 'workshop-rows' || (imageInputMode === 'workshop-custom' && activeEditor?.kind === 'workshop'))
 		&& editorFiles.some((file) => !!file && !isPublicScreenshot(file) && /\.(gif|apng)$/i.test(file.name));
 	const publicScreenshotMatches = publicScreenshots.filter((screenshot) => !publicScreenshotSearch.trim() || `${screenshot.searchText || ''} ${screenshot.id} ${screenshot.steamUrl}`.toLowerCase().includes(publicScreenshotSearch.trim().toLowerCase()));
 	const publicScreenshotPageSize = publicScreenshotExpanded ? 9 : 6;
@@ -1762,6 +2019,23 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		<span>{label}</span>
 		{editorPreview[index]?.src ? <img src={editorPreview[index].src} alt={`Preview ${label.toLowerCase()}`} /> : <div className="showcase-editor-preview-empty">{editorLoading ? 'Preparing preview...' : 'Preview appears here'}</div>}
 	</div>;
+	const renderWorkshopPanel = (index: number) => {
+		const row = Math.floor(index / 5);
+		return <button
+			key={index}
+			type="button"
+			className={`showcase-editor-preview-panel showcase-editor-workshop-panel${workshopPanelFiles[index] ? ' has-upload' : ''}`}
+			style={{ aspectRatio: `${previewPanelSize(index).width} / ${previewPanelSize(index).height}` }}
+			aria-label={`Add image${5 - index % 5 > 1 ? ' or images' : ''} starting at row ${row + 1}, panel ${index % 5 + 1}`}
+			title="Click to add one or more panel images, starting here"
+			disabled={editorLoading}
+			onClick={() => requestWorkshopUpload({ kind: 'panels', index })}
+		>
+			<span>Row {row + 1} · {index % 5 + 1}</span>
+			{editorPreview[index]?.src ? <img src={editorPreview[index].src} alt="" /> : <div className="showcase-editor-preview-empty">{editorLoading ? 'Preparing...' : <><ImagePlus size={15} /><small>Add image</small></>}</div>}
+			{workshopPanelFiles[index] && <i className="showcase-editor-workshop-selected" aria-label="Panel image selected" />}
+		</button>;
+	};
 	const renderOverlay = (entry: ShowcaseEntry, host: HTMLElement) => {
 		const canExport = !!getExportableEntry(entry, entries.findIndex((item) => item.id === entry.id));
 		const isExporting = exportingShowcaseId === entry.id || exportingShowcaseId === 'all';
@@ -1858,7 +2132,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							<div className="showcase-editor-preview-heading"><strong>Preview</strong><span>{isAnimatedPreview ? 'GIF · first frame' : activeEditor.kind === 'featured-artwork' ? 'Single image' : activeEditor.kind === 'workshop' ? `${workshopRows} row${workshopRows === 1 ? '' : 's'} · ${editorPanelCount} panels` : `${editorPanelCount} panels`}</span></div>
 							<div className={`showcase-editor-preview-panels ${activeEditor.kind === 'workshop' ? 'is-workshop' : activeEditor.kind === 'featured-artwork' ? 'is-featured' : editorPanelCount === 4 ? 'is-four-panel' : 'is-two-panel'}`} style={previewStyle}>
 								{activeEditor.kind === 'workshop'
-									? Array.from({ length: editorPanelCount }, (_, index) => renderPreviewPanel(index, `Row ${Math.floor(index / 5) + 1} · ${index % 5 + 1}`))
+									? Array.from({ length: editorPanelCount }, (_, index) => renderWorkshopPanel(index))
 									: editorPanelCount === 4
 										? <>{renderPreviewPanel(0, 'Main')}<div className="showcase-editor-preview-side-stack">{[1, 2, 3].map((index) => renderPreviewPanel(index, `Side ${index}`, 'is-side'))}</div></>
 										: editorPanelCount === 2
@@ -1872,15 +2146,49 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 								<div className="showcase-editor-layout-choice" role="group" aria-label="Workshop showcase layout">
 								{Array.from({ length: maxWorkshopRows }, (_, index) => (index + 1) as WorkshopRows).map((rows) => <button key={rows} className={workshopRows === rows ? 'is-active' : ''} type="button" aria-pressed={workshopRows === rows} onClick={() => {
 										setWorkshopRows(rows);
-										setImageInputMode('composite');
-										setEditorFiles([]);
-										setEditorPreview([]);
+										const hasSelection = workshopRowFiles.slice(0, rows).some(Boolean) || workshopPanelFiles.slice(0, rows * 5).some(Boolean);
+										setImageInputMode(hasSelection ? 'workshop-custom' : 'composite');
+										setEditorFiles([
+											...workshopRowFiles.slice(0, rows).filter((file): file is File => !!file),
+											...workshopPanelFiles.slice(0, rows * 5).filter((file): file is File => !!file),
+										]);
 										setEditorError('');
 									}}>
 										<span className={`showcase-layout-icon is-workshop-${rows}`} aria-hidden="true">{Array.from({ length: rows * 5 }, (_, index) => <i key={index} />)}</span>
 										<span className="showcase-layout-copy"><strong>{rows} × 5</strong><small>{rows === 1 ? 'One image · 5 slots' : `${rows} images · ${rows * 5} slots`}</small></span>
 									</button>)}
 								</div>
+							</div>}
+							{activeEditor.kind === 'workshop' && <div className="showcase-editor-control-group">
+								<span className="showcase-editor-label">ROW ARTWORK</span>
+								<div className="showcase-editor-workshop-rows">
+									{Array.from({ length: workshopRows }, (_, row) => {
+										const selectedPanels = workshopPanelFiles.slice(row * 5, row * 5 + 5).filter(Boolean).length;
+										const rowFile = workshopRowFiles[row];
+										return <button
+											key={row}
+											className="showcase-editor-upload showcase-editor-workshop-row-button"
+											type="button"
+											disabled={editorLoading}
+											onClick={() => requestWorkshopUpload({ kind: 'row', index: row })}
+										>
+											<ImagePlus size={17} />
+											<span>
+												<strong>{rowFile ? `Replace row ${row + 1} image` : `Choose image for row ${row + 1}`}</strong>
+												<small>{rowFile ? sourceName(rowFile) : selectedPanels ? `${selectedPanels} of 5 panels filled individually` : 'One image split across all 5 panels'}</small>
+											</span>
+										</button>;
+									})}
+								</div>
+								<p className="showcase-editor-workshop-hint">Or click a panel in the preview to add one or more images starting there.</p>
+								<input
+									ref={workshopFileInputRef}
+									className="visually-hidden"
+									type="file"
+									multiple
+									accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif"
+									onChange={selectWorkshopFiles}
+								/>
 							</div>}
 							{(activeEditor.kind === 'artwork' || activeEditor.kind === 'screenshot') && <div className="showcase-editor-control-group"><span className="showcase-editor-label">LAYOUT</span><div className="showcase-editor-layout-choice" role="group" aria-label="Showcase layout">
 								<button className={artworkLayout === 'main-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-side'} onClick={() => { setArtworkLayout('main-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-two"><i /><i /></span><span className="showcase-layout-copy"><strong>Main + side</strong><small>2 panels</small></span></button>
@@ -1907,17 +2215,21 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 									{publicScreenshotExpanded && publicScreenshotHasMore && <button className="showcase-public-load-more" type="button" disabled={publicScreenshotsLoading} onClick={() => void loadPublicScreenshots(publicScreenshotNextPage, true)}>{publicScreenshotsLoading && <LoaderCircle size={13} className="spin" aria-hidden="true" />}{publicScreenshotsLoading ? 'Loading more...' : 'Load more screenshots'}</button>}
 								</> : <div className="showcase-public-picker-status">No public screenshots were found on this profile.</div>}
 							</div>}
-							<label className={`showcase-editor-upload ${editorPanelCount > 1 ? 'is-multiple' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setShowcaseFiles([...event.dataTransfer.files]); }}>
+							{activeEditor.kind !== 'workshop' && <label className={`showcase-editor-upload ${editorPanelCount > 1 ? 'is-multiple' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setShowcaseFiles([...event.dataTransfer.files]); }}>
 								<ImagePlus size={19} />
 								<span>
-									<strong>{editorFiles.filter(Boolean).length ? imageInputMode === 'workshop-rows' ? `${editorFiles.filter(Boolean).length} row images ready` : imageInputMode === 'separate' || imageInputMode === 'public' ? `${editorFiles.filter(Boolean).length} of ${editorPanelCount} panels ready` : sourceName(editorFiles[0] as EditorSource) : activeEditor.kind === 'workshop' && workshopRows > 1 ? `Choose ${workshopRows} images, one per row` : editorPanelCount > 1 ? 'Drop one image or choose ready-made panels' : 'Drop or choose an image'}</strong>
-									<small>{activeEditor.kind === 'workshop'
-										? workshopRows > 1 ? `Each image is split across five slots. Or select ${editorPanelCount} ready-made panels.` : 'One image is split across five Workshop slots.'
-										: editorPanelCount > 1 ? `One image is split to fit this Steam layout. Or select ${editorPanelCount} separate panels.` : 'Image or animated GIF'}</small>
-									{(imageInputMode === 'separate' || imageInputMode === 'public' || imageInputMode === 'workshop-rows') && editorFiles.filter(Boolean).length > 0 && <small className="showcase-editor-file-list">{editorFiles.filter((file): file is EditorSource => !!file).map(sourceName).join(' · ')}</small>}
+									<strong>{editorFiles.filter(Boolean).length
+										? imageInputMode === 'separate' || imageInputMode === 'public'
+											? `${editorFiles.filter(Boolean).length} of ${editorPanelCount} panels ready`
+											: sourceName(editorFiles[0] as EditorSource)
+										: editorPanelCount > 1 ? 'Drop one image or choose ready-made panels' : 'Drop or choose an image'}</strong>
+									<small>{editorPanelCount > 1
+										? `One image is split to fit this Steam layout. Or select ${editorPanelCount} separate panels.`
+										: 'Image or animated GIF'}</small>
+									{(imageInputMode === 'separate' || imageInputMode === 'public') && editorFiles.filter(Boolean).length > 0 && <small className="showcase-editor-file-list">{editorFiles.filter((file): file is EditorSource => !!file).map(sourceName).join(' · ')}</small>}
 								</span>
 								<input type="file" multiple={editorPanelCount > 1} accept="image/png,image/jpeg,image/webp,image/gif,image/apng,image/avif" onChange={selectShowcaseFiles} />
-							</label>
+							</label>}
 						</aside>
 					</div>
 				</>}
@@ -1926,7 +2238,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				<footer className="showcase-editor-footer">
 					<button className="showcase-editor-remove" type="button" onClick={() => { removeShowcase(activeEditor); setEditingId(null); }}><Trash2 size={15} /> Remove showcase</button>
 					<button className="showcase-editor-cancel" type="button" disabled={editorLoading} onClick={() => setEditingId(null)}>Cancel</button>
-					{activeEditor.kind !== 'other' && <button className="showcase-editor-apply" type="button" disabled={editorLoading || !!editorError || editorFiles.filter(Boolean).length !== expectedEditorFiles} onClick={() => void applyEditorChanges()}>{editorLoading ? 'Preparing...' : 'Apply to preview'}</button>}
+					{activeEditor.kind !== 'other' && <button className="showcase-editor-apply" type="button" disabled={editorLoading || !!editorError || (activeEditor.kind === 'workshop' ? !workshopSelectionCount : editorFiles.filter(Boolean).length !== expectedEditorFiles)} onClick={() => void applyEditorChanges()}>{editorLoading ? 'Preparing...' : 'Apply to preview'}</button>}
 				</footer>
 			</div>}
 		</dialog>
