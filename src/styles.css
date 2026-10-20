@@ -421,6 +421,7 @@ a { color: inherit; }
 .showcase-editor-upload-progress { display: block; margin-top: 7px; text-align: right; }
 .showcase-editor-workshop-rows { display: grid; gap: 6px; }
 .showcase-editor-workshop-row-button { width: 100%; min-height: 54px; }
+.showcase-editor-workshop-row-thumb { width: 54px; height: 38px; flex: 0 0 54px; border: 1px solid rgb(130 153 78 / 45%); object-fit: cover; }
 .showcase-editor-workshop-row-button:disabled { opacity: .55; cursor: wait; }
 .showcase-editor-workshop-hint { margin: 0; color: #7a847d; font-size: 9px; line-height: 1.45; }
 .showcase-editor-preview { min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: center; padding: 11px; border: 1px solid #d9dcd6; background: #e9e9e3; }

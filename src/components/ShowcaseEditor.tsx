@@ -693,6 +693,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	const [artworkLayout, setArtworkLayout] = useState<ArtworkLayout>('main-side');
 	const [workshopRows, setWorkshopRows] = useState<WorkshopRows>(1);
 	const [workshopRowFiles, setWorkshopRowFiles] = useState<Array<File | null>>(() => Array(3).fill(null));
+	const [workshopRowPreviews, setWorkshopRowPreviews] = useState<Array<string | null>>(() => Array(3).fill(null));
 	const [workshopPanelFiles, setWorkshopPanelFiles] = useState<Array<File | null>>(() => Array(15).fill(null));
 	const [editorFiles, setEditorFiles] = useState<Array<EditorSource | null>>([]);
 	const [editorPreview, setEditorPreview] = useState<Array<PreviewPanel | null>>([]);
@@ -1352,6 +1353,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		setArtworkLayout(savedLayout);
 		setWorkshopRows(savedWorkshopRows);
 		setWorkshopRowFiles(Array(3).fill(null));
+		setWorkshopRowPreviews(Array(3).fill(null));
 		setWorkshopPanelFiles(Array(15).fill(null));
 		workshopUploadTargetRef.current = null;
 		const panelCount = getMosaicPanelCount(entry.kind, savedLayout, savedWorkshopRows);
@@ -1458,6 +1460,11 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		const nextPanelFiles = [...workshopPanelFiles];
 		nextPanelFiles.fill(null, rowIndex * 5, rowIndex * 5 + 5);
 		setWorkshopRowFiles(nextRowFiles);
+		setWorkshopRowPreviews((current) => {
+			const next = [...current];
+			next[rowIndex] = null;
+			return next;
+		});
 		setWorkshopPanelFiles(nextPanelFiles);
 		setEditorFiles([file]);
 		setImageInputMode('workshop-custom');
@@ -1470,8 +1477,13 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			return next;
 		});
 		try {
-			const mosaic = await splitWorkshopMosaic(file);
+			const [mosaic, sourcePreview] = await Promise.all([splitWorkshopMosaic(file), readImageFile(file)]);
 			if (previewRequestId.current !== requestId) return;
+			setWorkshopRowPreviews((current) => {
+				const next = [...current];
+				next[rowIndex] = sourcePreview;
+				return next;
+			});
 			setEditorPreview((current) => {
 				const next = [...current];
 				mosaic.images.forEach((src, index) => {
@@ -1510,6 +1522,13 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		if (rowHadComposite) nextPanelFiles.fill(null, rowIndex * 5, rowEnd);
 		selected.forEach((file, index) => { nextPanelFiles[startIndex + index] = file; });
 		setWorkshopRowFiles(nextRowFiles);
+		if (rowHadComposite) {
+			setWorkshopRowPreviews((current) => {
+				const next = [...current];
+				next[rowIndex] = null;
+				return next;
+			});
+		}
 		setWorkshopPanelFiles(nextPanelFiles);
 		setEditorFiles([...nextRowFiles.filter((file): file is File => !!file), ...nextPanelFiles.filter((file): file is File => !!file)]);
 		setImageInputMode('workshop-custom');
@@ -1818,11 +1837,26 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				const animatedRow = mosaic.animatedRows?.find((row) => index >= row.startIndex && index < row.startIndex + 5);
 				const animation = animatedRow?.mosaic || mosaic.animated;
 				const animationPanelIndex = animatedRow ? index - animatedRow.startIndex : index;
+				const anchor = image.closest<HTMLAnchorElement>('a');
 				image.src = dataUrl;
 				image.style.height = animation ? `${animation.height}px` : 'auto';
+				if (!animation) {
+					image.style.display = 'block';
+					image.style.width = '100%';
+					image.style.maxWidth = '100%';
+					image.style.minHeight = '0';
+					image.style.objectFit = 'fill';
+					image.style.transform = 'none';
+					image.style.transformOrigin = 'top left';
+					if (anchor) {
+						anchor.style.display = '';
+						anchor.style.width = '';
+						anchor.style.height = '';
+						anchor.style.overflow = '';
+					}
+				}
 				if (entry.kind === 'featured-artwork' && !animation) fitFeaturedImage(image);
 				image.closest<HTMLElement>('[data-steamcanvas-empty-slot]')?.removeAttribute('data-steamcanvas-empty-slot');
-				const anchor = image.closest<HTMLAnchorElement>('a');
 				anchor?.setAttribute('href', dataUrl);
 				if (entry.kind === 'workshop') {
 					image.style.display = 'block';
@@ -2172,7 +2206,9 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 											disabled={editorLoading}
 											onClick={() => requestWorkshopUpload({ kind: 'row', index: row })}
 										>
-											<ImagePlus size={17} />
+											{rowFile && workshopRowPreviews[row]
+												? <img className="showcase-editor-workshop-row-thumb" src={workshopRowPreviews[row] || undefined} alt="" />
+												: <ImagePlus size={17} />}
 											<span>
 												<strong>{rowFile ? `Replace row ${row + 1} image` : `Choose image for row ${row + 1}`}</strong>
 												<small>{rowFile ? sourceName(rowFile) : selectedPanels ? `${selectedPanels} of 5 panels filled individually` : 'One image split across all 5 panels'}</small>
