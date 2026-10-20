@@ -1,3 +1,6 @@
+// Copyright (C) 2026 dumbapplee
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { ensureShowcaseArea } from '../utils/showcaseArea';
@@ -15,6 +18,7 @@ type ShowcaseEntry = {
 	title: string;
 	exportFiles?: Array<{ name: string; url: string }>;
 	animatedArtwork?: { name: string; url: string };
+	mosaicSources?: Array<{ startIndex: number; name: string; url: string }>;
 	element: HTMLElement;
 	host: HTMLElement;
 };
@@ -697,6 +701,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	const [workshopPanelFiles, setWorkshopPanelFiles] = useState<Array<File | null>>(() => Array(15).fill(null));
 	const [editorFiles, setEditorFiles] = useState<Array<EditorSource | null>>([]);
 	const [editorPreview, setEditorPreview] = useState<Array<PreviewPanel | null>>([]);
+	const [uploadButtonPreview, setUploadButtonPreview] = useState<string | null>(null);
 	const [editorLoading, setEditorLoading] = useState(false);
 	const [editorProgress, setEditorProgress] = useState('');
 	const [editorError, setEditorError] = useState('');
@@ -1346,6 +1351,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		: imageInputMode === 'separate' || imageInputMode === 'public' ? editorPanelCount : 1;
 
 	function openEditor(entry: ShowcaseEntry) {
+		previewRequestId.current += 1;
 		const publicSelection = entry.element.dataset.steamcanvasPublicScreenshotData ? JSON.parse(entry.element.dataset.steamcanvasPublicScreenshotData) as PublicScreenshot[] : [];
 		const publicSelectionIds = publicSelection.map((item) => item.id);
 		const savedLayout = publicSelectionIds.length || entry.element.dataset.steamcanvasMosaicPanels === '4' ? 'main-three-side' : 'main-side';
@@ -1367,6 +1373,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			width: image.naturalWidth || image.width || 16,
 			height: image.naturalHeight || image.height || 9,
 		})));
+		setUploadButtonPreview(publicSelection[0]?.thumbnailUrl || currentImages[0]?.currentSrc || currentImages[0]?.src || null);
 		setEditorLoading(false);
 		setEditorProgress('');
 		setEditorError('');
@@ -1378,6 +1385,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		setPublicScreenshotNextPage(1);
 		setPublicScreenshotHasMore(true);
 		if (publicSelection.length) void updateEditorPreview(entry, publicSelection, 'public');
+		else if (entry.mosaicSources?.length) void restoreMosaicSources(entry, savedLayout, savedWorkshopRows);
 		if (entry.kind === 'screenshot' && profileUrl) void loadPublicScreenshots(1, false, entry.id);
 	}
 
@@ -1411,7 +1419,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		}
 	}
 
-	async function updateEditorPreview(entry: ShowcaseEntry, files: Array<EditorSource | null>, mode: ImageInputMode) {
+	async function updateEditorPreview(entry: ShowcaseEntry, files: Array<EditorSource | null>, mode: ImageInputMode, layout = artworkLayout) {
 		const requestId = ++previewRequestId.current;
 		setEditorLoading(true);
 		setEditorError('');
@@ -1423,7 +1431,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				const rows = await splitWorkshopRows(files.filter((file): file is File => !!file && !isPublicScreenshot(file)));
 				panels = rows.images.map((src, index) => ({ src: rows.previewImages?.[index] || src, ...(rows.panelDimensions?.[index] || { width: 1, height: 1 }) }));
 			} else if (files[0] && hasTwoPanelImageEditor(entry.kind)) {
-				const mosaic = await splitArtworkMosaic(files[0] as File, artworkLayout);
+				const mosaic = await splitArtworkMosaic(files[0] as File, layout);
 				panels = mosaic.images.map((src, index) => ({ src: mosaic.previewImages?.[index] || src, ...(mosaic.panelDimensions?.[index] || { width: 16, height: 9 }) }));
 			} else if (files[0] && entry.kind === 'workshop') {
 				const mosaic = await splitWorkshopMosaic(files[0] as File);
@@ -1433,11 +1441,83 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			} else {
 				panels = [];
 			}
-			if (previewRequestId.current === requestId) setEditorPreview(panels);
+			if (previewRequestId.current === requestId) {
+				setEditorPreview(panels);
+				const source = files.find((file): file is EditorSource => !!file) || null;
+				const thumbnail = mode === 'composite' && source && !isPublicScreenshot(source)
+					? (await readPreviewPanel(source)).src
+					: panels.find((panel): panel is PreviewPanel => !!panel)?.src || null;
+				if (previewRequestId.current === requestId) setUploadButtonPreview(thumbnail);
+			}
 		} catch (caught) {
 			if (previewRequestId.current === requestId) {
 				setEditorError(caught instanceof Error ? caught.message : 'Could not prepare the image preview.');
 				setEditorPreview([]);
+			}
+		} finally {
+			if (previewRequestId.current === requestId) setEditorLoading(false);
+		}
+	}
+
+	async function restoreMosaicSources(entry: ShowcaseEntry, layout: ArtworkLayout, rows: WorkshopRows) {
+		const requestId = ++previewRequestId.current;
+		setEditorLoading(true);
+		setEditorError('');
+		try {
+			const sources = await Promise.all((entry.mosaicSources || []).map(async (source) => {
+				const response = await fetch(source.url);
+				if (!response.ok) throw new Error(`Could not restore ${source.name}.`);
+				const blob = await response.blob();
+				return { ...source, file: new File([blob], source.name, { type: blob.type }) };
+			}));
+			if (!sources.length || previewRequestId.current !== requestId) return;
+			const firstPreview = await readPreviewPanel(sources[0].file);
+			if (entry.kind === 'workshop') {
+				const rowFiles: Array<File | null> = Array(3).fill(null);
+				const rowPreviews: Array<string | null> = Array(3).fill(null);
+				const panelFiles: Array<File | null> = Array(15).fill(null);
+				const currentImages = getShowcaseImages(entry.element, entry.kind);
+				const panels: Array<PreviewPanel | null> = currentImages.slice(0, rows * 5).map((image) => ({
+					src: image.currentSrc || image.src,
+					width: image.naturalWidth || image.width || 1,
+					height: image.naturalHeight || image.height || 1,
+				}));
+				for (const source of sources) {
+					const row = Math.floor(source.startIndex / 5);
+					if (row >= rows) continue;
+					rowFiles[row] = source.file;
+					rowPreviews[row] = (await readPreviewPanel(source.file)).src;
+					const mosaic = await splitWorkshopMosaic(source.file);
+					mosaic.images.forEach((src, index) => {
+						panels[source.startIndex + index] = {
+							src: mosaic.previewImages?.[index] || src,
+							...(mosaic.panelDimensions?.[index] || { width: 1, height: 1 }),
+						};
+					});
+				}
+				if (previewRequestId.current !== requestId) return;
+				setWorkshopRowFiles(rowFiles);
+				setWorkshopRowPreviews(rowPreviews);
+				setWorkshopPanelFiles(panelFiles);
+				setEditorFiles(sources.map((source) => source.file));
+				setImageInputMode('workshop-custom');
+				setEditorPreview(panels);
+				setUploadButtonPreview(firstPreview.src);
+			} else {
+				const file = sources[0].file;
+				const mosaic = await splitArtworkMosaic(file, layout);
+				if (previewRequestId.current !== requestId) return;
+				setEditorFiles([file]);
+				setImageInputMode('composite');
+				setEditorPreview(mosaic.images.map((src, index) => ({
+					src: mosaic.previewImages?.[index] || src,
+					...(mosaic.panelDimensions?.[index] || { width: 16, height: 9 }),
+				})));
+				setUploadButtonPreview(firstPreview.src);
+			}
+		} catch (caught) {
+			if (previewRequestId.current === requestId) {
+				setEditorError(caught instanceof Error ? caught.message : 'Could not restore the animated mosaic preview.');
 			}
 		} finally {
 			if (previewRequestId.current === requestId) setEditorLoading(false);
@@ -1584,12 +1664,14 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			animatedArtwork?: { name: string; url: string };
 		};
 		const assets = new Map<number, WorkshopAsset>();
+		const animatedMosaicSources: NonNullable<ShowcaseEntry['mosaicSources']> = [];
 		try {
 			for (let row = 0; row < workshopRows; row += 1) {
 				const rowFile = workshopRowFiles[row];
 				if (rowFile) {
 					setEditorProgress(`Preparing row ${row + 1}...`);
 					const mosaic = await splitWorkshopMosaic(rowFile);
+					if (mosaic.animated) animatedMosaicSources.push({ startIndex: row * 5, name: rowFile.name, url: mosaic.images[0] });
 					const baseName = sourceName(rowFile).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || 'steam-workshop';
 					const gifPanels = mosaic.animated?.format === 'gif'
 						? await encodeAnimatedMosaic(rowFile, mosaic.animated)
@@ -1677,10 +1759,16 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				if (item.id !== entry.id) return item;
 				const exportFiles = [...(item.exportFiles || [])];
 				for (const [index, asset] of assets) exportFiles[index] = { name: asset.name, url: asset.exportUrl };
+				const changedRows = new Set([...assets.keys()].map((index) => Math.floor(index / 5)));
+				const mosaicSources = [
+					...(item.mosaicSources || []).filter((source) => !changedRows.has(Math.floor(source.startIndex / 5))),
+					...animatedMosaicSources,
+				];
 				return {
 					...item,
 					exportFiles: exportFiles.filter((file): file is { name: string; url: string } => !!file),
 					animatedArtwork,
+					mosaicSources: mosaicSources.length ? mosaicSources : undefined,
 				};
 			}));
 			setEditorError('');
@@ -1703,6 +1791,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			setImageInputMode('composite');
 			setEditorFiles([]);
 			setEditorPreview([]);
+			setUploadButtonPreview(null);
 			setEditorError(activeEditor.kind === 'workshop' && workshopRows > 1
 				? `Choose ${workshopRows} images (one per row) or exactly ${editorPanelCount} ready-made panels.`
 				: `Choose one complete image or exactly ${editorPanelCount} separate panels.`);
@@ -1713,6 +1802,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			? Array.from({ length: editorPanelCount }, (_, index) => selected[index] || null)
 			: selected;
 		setEditorFiles(files);
+		setUploadButtonPreview(null);
 		setEditorError('');
 		void updateEditorPreview(activeEditor, files, mode);
 	}
@@ -1729,6 +1819,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			: current.length < publicPanelCount ? [...current, screenshot] : current;
 		setImageInputMode('public');
 		setEditorFiles(next);
+		setUploadButtonPreview(next[0]?.thumbnailUrl || null);
 		setEditorError('');
 		void updateEditorPreview(activeEditor, next, 'public');
 	}
@@ -1919,6 +2010,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							...item,
 							exportFiles: gifPanels.map((url, index) => ({ name: `${baseName}-${index === 0 ? 'main' : panelCount === 2 ? 'side' : `side-${index}`}.gif`, url })),
 							animatedArtwork: undefined,
+							mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 						}));
 					} catch (caught) {
 						const reason = caught instanceof Error ? caught.message : 'GIF export could not be completed.';
@@ -1926,6 +2018,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							...item,
 							exportFiles: undefined,
 							animatedArtwork: { name: sourceName(files[0]), url: mosaic.images[0] },
+							mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 						}));
 						exportWarning = true;
 						setError(`${reason} The original animated file is available to download.`);
@@ -1935,6 +2028,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 						...item,
 						exportFiles: undefined,
 						animatedArtwork: { name: sourceName(files[0]), url: mosaic.images[0] },
+						mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 					}));
 				} else {
 					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
@@ -1944,6 +2038,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							url,
 						})),
 						animatedArtwork: undefined,
+						mosaicSources: undefined,
 					}));
 				}
 			}
@@ -1959,6 +2054,11 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							url: animatedPanelUrls.get(index) || url,
 						})),
 						animatedArtwork: undefined,
+						mosaicSources: (mosaic.animatedRows || []).map((row) => ({
+							startIndex: row.startIndex,
+							name: row.file.name,
+							url: mosaic.images[row.startIndex],
+						})),
 					}));
 				} else if (mosaic.animated?.format === 'gif') {
 					try {
@@ -1967,6 +2067,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							...item,
 							exportFiles: gifPanels.map((url, index) => ({ name: `${baseName}-${index + 1}.gif`, url })),
 							animatedArtwork: undefined,
+							mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 						}));
 					} catch (caught) {
 						const reason = caught instanceof Error ? caught.message : 'GIF export could not be completed.';
@@ -1974,6 +2075,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							...item,
 							exportFiles: undefined,
 							animatedArtwork: { name: sourceName(files[0]), url: mosaic.images[0] },
+							mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 						}));
 						exportWarning = true;
 						setError(`${reason} The original animated file is available to download.`);
@@ -1983,12 +2085,14 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 						...item,
 						exportFiles: undefined,
 						animatedArtwork: { name: sourceName(files[0]), url: mosaic.images[0] },
+						mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 					}));
 				} else {
 					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
 						...item,
 						exportFiles: mosaic.images.map((url, index) => ({ name: `${baseName}-${index + 1}.${separateUploads && !isPublicScreenshot(files[index]) ? getImageExtension(files[index]) : 'png'}`, url })),
 						animatedArtwork: undefined,
+						mosaicSources: undefined,
 					}));
 				}
 			}
@@ -1998,6 +2102,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 					...item,
 					exportFiles: [{ name: `${baseName}.${getImageExtension(files[0] as File)}`, url: mosaic.images[0] }],
 					animatedArtwork: undefined,
+					mosaicSources: undefined,
 				}));
 			}
 			if (!exportWarning) {
@@ -2227,8 +2332,8 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 								/>
 							</div>}
 							{(activeEditor.kind === 'artwork' || activeEditor.kind === 'screenshot') && <div className="showcase-editor-control-group"><span className="showcase-editor-label">LAYOUT</span><div className="showcase-editor-layout-choice" role="group" aria-label="Showcase layout">
-								<button className={artworkLayout === 'main-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-side'} onClick={() => { setArtworkLayout('main-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-two"><i /><i /></span><span className="showcase-layout-copy"><strong>Main + side</strong><small>2 panels</small></span></button>
-								<button className={artworkLayout === 'main-three-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-three-side'} onClick={() => { setArtworkLayout('main-three-side'); setEditorFiles([]); setEditorPreview([]); setEditorError(''); }}><span className="showcase-layout-icon is-four"><i /><i /><i /><i /></span><span className="showcase-layout-copy"><strong>Main + 3 sides</strong><small>4 panels</small></span></button>
+								<button className={artworkLayout === 'main-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-side'} onClick={() => { setArtworkLayout('main-side'); setEditorFiles([]); setEditorPreview([]); setUploadButtonPreview(null); setEditorError(''); }}><span className="showcase-layout-icon is-two"><i /><i /></span><span className="showcase-layout-copy"><strong>Main + side</strong><small>2 panels</small></span></button>
+								<button className={artworkLayout === 'main-three-side' ? 'is-active' : ''} type="button" aria-pressed={artworkLayout === 'main-three-side'} onClick={() => { setArtworkLayout('main-three-side'); setEditorFiles([]); setEditorPreview([]); setUploadButtonPreview(null); setEditorError(''); }}><span className="showcase-layout-icon is-four"><i /><i /><i /><i /></span><span className="showcase-layout-copy"><strong>Main + 3 sides</strong><small>4 panels</small></span></button>
 							</div></div>}
 							{activeEditor.kind === 'screenshot' && <div className={`showcase-public-picker ${publicScreenshotExpanded ? 'is-expanded' : ''}`}>
 								<div className="showcase-editor-label">PUBLIC SCREENSHOTS</div>
@@ -2252,7 +2357,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 								</> : <div className="showcase-public-picker-status">No public screenshots were found on this profile.</div>}
 							</div>}
 							{activeEditor.kind !== 'workshop' && <label className={`showcase-editor-upload ${editorPanelCount > 1 ? 'is-multiple' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setShowcaseFiles([...event.dataTransfer.files]); }}>
-								<ImagePlus size={19} />
+								{uploadButtonPreview ? <img className="showcase-editor-upload-thumb" src={uploadButtonPreview} alt="" /> : <ImagePlus size={19} />}
 								<span>
 									<strong>{editorFiles.filter(Boolean).length
 										? imageInputMode === 'separate' || imageInputMode === 'public'

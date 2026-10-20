@@ -1,3 +1,6 @@
+// Copyright (C) 2026 dumbapplee
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, ChevronLeft, ChevronRight, ExternalLink, LoaderCircle, Palette, RotateCcw, Search, X } from 'lucide-react';
 import { fetchWithRetry } from '../utils/fetchWithRetry';

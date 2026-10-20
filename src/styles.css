@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 dumbapplee */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;1,500;1,600&display=swap');
 
 :root {
@@ -391,6 +394,7 @@ a { color: inherit; }
 .showcase-layout-copy strong { font-size: 10px; font-weight: 600; }
 .showcase-layout-copy small { color: #7a847d; font-size: 9px; }
 .showcase-editor-upload { position: relative; min-height: 66px; display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 10px; border: 1px dashed #aeb7a2; background: #fff; color: #52613f; font-size: 11px; cursor: pointer; }
+.showcase-editor-upload-thumb { width: 54px; height: 38px; flex: 0 0 54px; border: 1px solid rgb(130 153 78 / 45%); object-fit: cover; }
 .showcase-editor-upload > span { display: grid; gap: 4px; }
 .showcase-editor-upload strong { font-size: 11px; font-weight: 600; }
 .showcase-editor-upload small, .showcase-editor-upload-progress { color: #7a847d; font-size: 9px; }

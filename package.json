@@ -4,6 +4,7 @@
     "name": "dumbapplee",
     "url": "https://github.com/dumbapplee"
   },
+  "license": "AGPL-3.0-only",
   "private": true,
   "version": "0.1.0",
   "type": "module",

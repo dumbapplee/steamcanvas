@@ -13,7 +13,7 @@ Preview profile ideas, tune the details, and shape your showcases — all before
   <a href="https://github.com/dumbapplee/steamcanvas"><img alt="Express" src="https://img.shields.io/badge/Express-5-111111?logo=express&logoColor=white"></a>
 </p>
 
-[Explore the features](#-the-workshop) · [Run locally](#-run-it-locally) · [Read the asset notes](docs/STEAM_PROFILE_ASSETS.md)
+[Explore the features](#-the-workshop) · [Run locally](#-run-it-locally) · [Read the asset notes](docs/STEAM_PROFILE_ASSETS.md) · [License](#license)
 
 </div>
 
@@ -134,6 +134,12 @@ docs/
 | `npm run dev` | Start the Vite frontend and API server for local development |
 | `npm run build` | Type-check the client and server, then build the frontend |
 | `npm run start` | Serve the production build and API |
+
+## License
+
+Copyright (C) 2026 dumbapplee.
+
+SteamCanvas is licensed under the GNU Affero General Public License, version 3 only. See [LICENSE](LICENSE). Redistributed copies must retain the copyright and license notices. If you run a modified version as a network service, AGPLv3 requires you to offer its corresponding source code to users interacting with it remotely.
 
 ---
 

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 dumbapplee
+// SPDX-License-Identifier: AGPL-3.0-only
+
 export function ensureShowcaseArea(document: Document): HTMLElement | null {
 	const column = document.querySelector<HTMLElement>('.profile_leftcol');
 	if (!column) return null;

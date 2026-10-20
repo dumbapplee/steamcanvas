@@ -1,3 +1,6 @@
+// Copyright (C) 2026 dumbapplee
+// SPDX-License-Identifier: AGPL-3.0-only
+
 type FetchRetryOptions = {
   maxRetries?: number;
   onRetry?: (retry: number) => void;

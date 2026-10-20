@@ -1,3 +1,6 @@
+// Copyright (C) 2026 dumbapplee
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useState, type ReactNode } from 'react';
 import { ArrowUpRight, Check, Copy, FileArchive, Image, Monitor, PanelsTopLeft, Terminal, Upload } from 'lucide-react';
 
