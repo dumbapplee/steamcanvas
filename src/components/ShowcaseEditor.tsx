@@ -68,7 +68,7 @@ type ShowcasePointerGesture = {
 	element: HTMLElement;
 	placeholder: HTMLElement | null;
 	ghost: HTMLElement | null;
-	originalDisplay: string;
+	originalCssText: string;
 	originalUserSelect: string;
 };
 
@@ -875,16 +875,25 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 
 	useEffect(() => {
 		if (!previewDocument) return;
+		let pointerFrame = 0;
+		let pendingPointerEvent: PointerEvent | null = null;
+		let targetRects: Array<{ entry: ShowcaseEntry; rect: DOMRect }> = [];
+		let targetRectsDirty = true;
+		const cancelPendingPointerMove = () => {
+			pendingPointerEvent = null;
+			if (pointerFrame) previewDocument.defaultView?.cancelAnimationFrame(pointerFrame);
+			pointerFrame = 0;
+		};
 		const finishGesture = (gesture: ShowcasePointerGesture, commit: boolean) => {
-			const { element, placeholder, ghost, originalDisplay, originalUserSelect } = gesture;
+			cancelPendingPointerMove();
+			const { element, placeholder, ghost, originalCssText, originalUserSelect } = gesture;
 			if (commit && gesture.moved) {
-				element.style.display = originalDisplay;
 				placeholder?.remove();
 				dropShowcaseOn(dragTargetRef.current.id, dragTargetRef.current.after, gesture.id);
 			} else {
 				placeholder?.remove();
-				element.style.display = originalDisplay;
 			}
+			element.style.cssText = originalCssText;
 			ghost?.remove();
 			delete element.dataset.steamcanvasDragging;
 			previewDocument.documentElement.style.userSelect = originalUserSelect;
@@ -894,7 +903,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 			setDraggingShowcaseId(null);
 			setDragTargetShowcaseId(null);
 		};
-		const onPointerMove = (event: PointerEvent) => {
+		const processPointerMove = (event: PointerEvent) => {
 			const gesture = pointerGestureRef.current;
 			if (!gesture || gesture.pointerId !== event.pointerId) return;
 			if (!gesture.moved && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 7) return;
@@ -911,13 +920,22 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				placeholder.style.cssText = `box-sizing:border-box;width:${rect.width}px;height:${rect.height}px;min-height:${rect.height}px;margin:${computed?.margin || '0'};border:1px dashed rgba(126,155,61,.72);border-radius:3px;background:rgba(196,243,106,.12);transition:transform .16s ease,margin .16s ease;`;
 				gesture.element.parentElement?.insertBefore(placeholder, gesture.element);
 				gesture.placeholder = placeholder;
+				gesture.element.style.setProperty('position', 'fixed', 'important');
+				gesture.element.style.setProperty('left', `${rect.left}px`, 'important');
+				gesture.element.style.setProperty('top', `${rect.top}px`, 'important');
+				gesture.element.style.setProperty('width', `${rect.width}px`, 'important');
+				gesture.element.style.setProperty('height', `${rect.height}px`, 'important');
+				gesture.element.style.setProperty('margin', '0', 'important');
+				gesture.element.style.setProperty('visibility', 'hidden', 'important');
+				gesture.element.style.setProperty('pointer-events', 'none', 'important');
+				targetRectsDirty = true;
 				const ghost = gesture.element.cloneNode(true) as HTMLElement;
 				ghost.querySelectorAll('[data-steamcanvas-showcase-controls]').forEach((control) => control.remove());
-				ghost.querySelectorAll('img').forEach((image) => { image.draggable = false; });
+				ghost.querySelectorAll('img, video, audio, canvas').forEach((media) => media.remove());
 				ghost.style.cssText += `;position:fixed!important;left:${rect.left}px!important;top:${rect.top}px!important;width:${rect.width}px!important;height:${rect.height}px!important;margin:0!important;z-index:2147483647!important;opacity:.94!important;pointer-events:none!important;transform:scale(1.025)!important;transform-origin:center!important;box-shadow:0 20px 48px rgba(0,0,0,.42)!important;transition:box-shadow .14s ease,transform .14s ease!important;`;
+				ghost.style.setProperty('visibility', 'visible', 'important');
 				previewDocument.body.append(ghost);
 				gesture.ghost = ghost;
-				gesture.element.style.display = 'none';
 				previewDocument.documentElement.style.userSelect = 'none';
 				setDraggingShowcaseId(gesture.id);
 			}
@@ -925,33 +943,59 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				gesture.ghost.style.left = `${event.clientX - gesture.offsetX}px`;
 				gesture.ghost.style.top = `${event.clientY - gesture.offsetY}px`;
 			}
-			const nearest = entries
-				.filter((entry) => entry.id !== gesture.id)
-				.map((entry) => ({ entry, rect: entry.element.getBoundingClientRect() }))
-				.sort((left, right) => Math.abs(left.rect.top + left.rect.height / 2 - event.clientY) - Math.abs(right.rect.top + right.rect.height / 2 - event.clientY))[0];
+			if (targetRectsDirty) {
+				targetRects = entries
+					.filter((entry) => entry.id !== gesture.id)
+					.map((entry) => ({ entry, rect: entry.element.getBoundingClientRect() }));
+				targetRectsDirty = false;
+			}
+			let nearest: { entry: ShowcaseEntry; rect: DOMRect } | null = null;
+			let nearestDistance = Number.POSITIVE_INFINITY;
+			for (const candidate of targetRects) {
+				const { entry, rect } = candidate;
+				const distance = Math.abs(rect.top + rect.height / 2 - event.clientY);
+				if (distance < nearestDistance) {
+					nearest = { entry, rect };
+					nearestDistance = distance;
+				}
+			}
 			const id = nearest?.entry.id || null;
 			const after = nearest ? event.clientY >= nearest.rect.top + nearest.rect.height / 2 : false;
+			const targetChanged = dragTargetRef.current.id !== id;
 			dragTargetRef.current = { id, after };
-			setDragTargetShowcaseId(id);
+			if (targetChanged) setDragTargetShowcaseId(id);
 			if (nearest && gesture.placeholder) {
 				const parent = nearest.entry.element.parentElement;
 				const reference = after ? nearest.entry.element.nextSibling : nearest.entry.element;
 				if (parent && reference !== gesture.placeholder) {
-					const previousTops = new Map(entries.filter((entry) => entry.id !== gesture.id).map((entry) => [entry.element, entry.element.getBoundingClientRect().top]));
 					parent.insertBefore(gesture.placeholder, reference);
-					for (const [element, previousTop] of previousTops) {
-						const deltaY = previousTop - element.getBoundingClientRect().top;
-						if (Math.abs(deltaY) < 1) continue;
-						element.getAnimations().forEach((animation) => animation.cancel());
-						element.animate([{ transform: `translateY(${deltaY}px)` }, { transform: 'translateY(0)' }], { duration: 190, easing: 'cubic-bezier(.2,.75,.25,1)' });
-					}
+					targetRectsDirty = true;
 				}
 			}
 			event.preventDefault();
 		};
+		const flushPendingPointerMove = () => {
+			const pending = pendingPointerEvent;
+			cancelPendingPointerMove();
+			if (pending) processPointerMove(pending);
+		};
+		const onPointerMove = (event: PointerEvent) => {
+			const gesture = pointerGestureRef.current;
+			if (!gesture || gesture.pointerId !== event.pointerId) return;
+			if (gesture.moved || Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) >= 7) event.preventDefault();
+			pendingPointerEvent = event;
+			if (pointerFrame) return;
+			pointerFrame = previewDocument.defaultView?.requestAnimationFrame(() => {
+				pointerFrame = 0;
+				const pending = pendingPointerEvent;
+				pendingPointerEvent = null;
+				if (pending) processPointerMove(pending);
+			}) || 0;
+		};
 		const onPointerUp = (event: PointerEvent) => {
 			const gesture = pointerGestureRef.current;
 			if (!gesture || gesture.pointerId !== event.pointerId) return;
+			flushPendingPointerMove();
 			finishGesture(gesture, true);
 		};
 		const onPointerCancel = (event: PointerEvent) => {
@@ -984,7 +1028,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 					element: entry.element,
 					placeholder: null,
 					ghost: null,
-					originalDisplay: entry.element.style.display,
+					originalCssText: entry.element.style.cssText,
 					originalUserSelect,
 				};
 				setHoveredShowcaseId(entry.id);
@@ -1008,6 +1052,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 		previewDocument.addEventListener('pointercancel', onPointerCancel, true);
 		previewDocument.addEventListener('click', onClick, true);
 		return () => {
+			cancelPendingPointerMove();
 			handlers.forEach((cleanup) => cleanup());
 			previewDocument.removeEventListener('pointermove', onPointerMove, true);
 			previewDocument.removeEventListener('pointerup', onPointerUp, true);
@@ -1188,8 +1233,12 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	function syncOrder(nextEntries: ShowcaseEntry[]) {
 		const area = getShowcaseArea(previewDocument);
 		if (!area) return;
-		const placeholder = [...area.children].find((child) => child.classList.contains('customization_edit')) || null;
-		nextEntries.forEach((entry) => area.insertBefore(entry.element, placeholder));
+		let reference: Node | null = [...area.children].find((child) => child.classList.contains('customization_edit')) || null;
+		for (let index = nextEntries.length - 1; index >= 0; index -= 1) {
+			const element = nextEntries[index].element;
+			if (element.parentElement !== area || element.nextSibling !== reference) area.insertBefore(element, reference);
+			reference = element;
+		}
 		setEntries(nextEntries);
 	}
 
@@ -1922,14 +1971,29 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 					panels: await encodeAnimatedMosaic(row.file, row.mosaic),
 				})))
 				: [];
+			let encodedMosaicGif: string[] = [];
+			let mosaicGifEncodingError: string | null = null;
+			if (!workshopRowUploads && mosaic.animated?.format === 'gif') {
+				try {
+					encodedMosaicGif = await encodeAnimatedMosaic(files[0] as File, mosaic.animated);
+				} catch (caught) {
+					mosaicGifEncodingError = caught instanceof Error ? caught.message : 'GIF export could not be completed.';
+				}
+			}
+			const encodedPanelUrls = new Map<number, string>();
+			encodedMosaicGif.forEach((url, index) => encodedPanelUrls.set(index, url));
+			encodedWorkshopRows.forEach(({ startIndex, panels }) => panels.forEach((url, index) => encodedPanelUrls.set(startIndex + index, url)));
 			for (const [index, dataUrl] of mosaic.images.entries()) {
 				const image = images[index];
 				if (!image) break;
+				const encodedPanelUrl = encodedPanelUrls.get(index);
+				const encodedPreviewPanelUrl = entry.kind === 'workshop' ? undefined : encodedPanelUrl;
 				const animatedRow = mosaic.animatedRows?.find((row) => index >= row.startIndex && index < row.startIndex + 5);
-				const animation = animatedRow?.mosaic || mosaic.animated;
+				const animation = encodedPreviewPanelUrl ? undefined : animatedRow?.mosaic || mosaic.animated;
 				const animationPanelIndex = animatedRow ? index - animatedRow.startIndex : index;
 				const anchor = image.closest<HTMLAnchorElement>('a');
-				image.src = dataUrl;
+				const panelUrl = encodedPreviewPanelUrl || dataUrl;
+				image.src = panelUrl;
 				image.style.height = animation ? `${animation.height}px` : 'auto';
 				if (!animation) {
 					image.style.display = 'block';
@@ -1948,7 +2012,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				}
 				if (entry.kind === 'featured-artwork' && !animation) fitFeaturedImage(image);
 				image.closest<HTMLElement>('[data-steamcanvas-empty-slot]')?.removeAttribute('data-steamcanvas-empty-slot');
-				anchor?.setAttribute('href', dataUrl);
+				anchor?.setAttribute('href', panelUrl);
 				if (entry.kind === 'workshop') {
 					image.style.display = 'block';
 					image.style.width = '100%';
@@ -2004,16 +2068,14 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 				}
 				const baseName = sourceName(files[0]).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').slice(0, 80) || (entry.kind === 'screenshot' ? 'steam-screenshot' : 'steam-artwork');
 				if (mosaic.animated?.format === 'gif') {
-					try {
-						const gifPanels = await encodeAnimatedMosaic(files[0] as File, mosaic.animated);
+					if (encodedMosaicGif.length) {
 						setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
 							...item,
-							exportFiles: gifPanels.map((url, index) => ({ name: `${baseName}-${index === 0 ? 'main' : panelCount === 2 ? 'side' : `side-${index}`}.gif`, url })),
+							exportFiles: encodedMosaicGif.map((url, index) => ({ name: `${baseName}-${index === 0 ? 'main' : panelCount === 2 ? 'side' : `side-${index}`}.gif`, url })),
 							animatedArtwork: undefined,
 							mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 						}));
-					} catch (caught) {
-						const reason = caught instanceof Error ? caught.message : 'GIF export could not be completed.';
+					} else {
 						setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
 							...item,
 							exportFiles: undefined,
@@ -2021,7 +2083,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 						}));
 						exportWarning = true;
-						setError(`${reason} The original animated file is available to download.`);
+						setError(`${mosaicGifEncodingError || 'GIF export could not be completed.'} The original animated file is available to download.`);
 					}
 				} else if (mosaic.animated) {
 					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
@@ -2061,16 +2123,14 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 						})),
 					}));
 				} else if (mosaic.animated?.format === 'gif') {
-					try {
-						const gifPanels = await encodeAnimatedMosaic(files[0] as File, mosaic.animated);
+					if (encodedMosaicGif.length) {
 						setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
 							...item,
-							exportFiles: gifPanels.map((url, index) => ({ name: `${baseName}-${index + 1}.gif`, url })),
+							exportFiles: encodedMosaicGif.map((url, index) => ({ name: `${baseName}-${index + 1}.gif`, url })),
 							animatedArtwork: undefined,
 							mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 						}));
-					} catch (caught) {
-						const reason = caught instanceof Error ? caught.message : 'GIF export could not be completed.';
+					} else {
 						setEntries((current) => current.map((item) => item.id !== entry.id ? item : {
 							...item,
 							exportFiles: undefined,
@@ -2078,7 +2138,7 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 							mosaicSources: [{ startIndex: 0, name: sourceName(files[0]), url: mosaic.images[0] }],
 						}));
 						exportWarning = true;
-						setError(`${reason} The original animated file is available to download.`);
+						setError(`${mosaicGifEncodingError || 'GIF export could not be completed.'} The original animated file is available to download.`);
 					}
 				} else if (mosaic.animated) {
 					setEntries((current) => current.map((item) => item.id !== entry.id ? item : {

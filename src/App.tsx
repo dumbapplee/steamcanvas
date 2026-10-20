@@ -251,7 +251,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!motionEnabled) return;
+    if (!motionEnabled || profile) return;
 
     const timer = window.setInterval(
       () => setMotionLayout((layout) => (layout + 1) % mosaicLayouts.length),
@@ -259,7 +259,7 @@ export default function App() {
     );
 
     return () => window.clearInterval(timer);
-  }, [motionEnabled]);
+  }, [motionEnabled, profile]);
 
   const themeVariableNames = [
     '--gradient-right', '--gradient-left', '--gradient-background', '--gradient-background-right',
@@ -562,8 +562,23 @@ export default function App() {
         }
       }, 700);
     };
-    const observer = new MutationObserver(saveDraft);
-    observer.observe(showcaseDocument.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+    let observedArea = showcaseDocument.querySelector<HTMLElement>('.profile_leftcol > .profile_customization_area');
+    let observer: MutationObserver;
+    observer = new MutationObserver(() => {
+      if (!observedArea) {
+        observedArea = showcaseDocument.querySelector<HTMLElement>('.profile_leftcol > .profile_customization_area');
+        if (observedArea) {
+          observer.disconnect();
+          observer.observe(observedArea, { subtree: true, childList: true, attributes: true, characterData: true });
+        }
+      }
+      saveDraft();
+    });
+    if (observedArea) {
+      observer.observe(observedArea, { subtree: true, childList: true, attributes: true, characterData: true });
+    } else {
+      observer.observe(showcaseDocument.documentElement, { subtree: true, childList: true });
+    }
     saveDraft();
     return () => {
       globalThis.clearTimeout(timer);
