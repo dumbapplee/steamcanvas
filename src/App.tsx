@@ -231,6 +231,14 @@ function isProjectDraft(value: unknown): value is ProjectDraft {
     && Number.isFinite(state.previewLevel);
 }
 
+function SiteDisclaimer() {
+  return (
+    <p className="site-disclaimer">
+      <strong>Disclaimer:</strong> SteamCanvas is an unofficial, community-made project. It is not affiliated with, endorsed by, sponsored by, or approved by Valve Corporation or Steam. "Steam" and related names and logos are trademarks of Valve Corporation and are used here only to describe compatibility.
+    </p>
+  );
+}
+
 export default function App() {
   const [motionEnabled, setMotionEnabled] = useState(
     () => typeof window === 'undefined' || !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -247,6 +255,8 @@ export default function App() {
   const [profileTheme, setProfileTheme] = useState<AppliedProfileTheme | null>(null);
   const [previewLevel, setPreviewLevel] = useState(0);
   const [sourceBackgroundImage, setSourceBackgroundImage] = useState('');
+  const [sourceBackgroundAnimated, setSourceBackgroundAnimated] = useState(false);
+  const backgroundIsAnimated = background ? Boolean(background.animated) : sourceBackgroundAnimated;
   const [sourceAvatarFrameImage, setSourceAvatarFrameImage] = useState('');
   const [showcaseDocument, setShowcaseDocument] = useState<Document | null>(null);
   const [showcaseAddTarget, setShowcaseAddTarget] = useState<HTMLDivElement | null>(null);
@@ -451,8 +461,8 @@ export default function App() {
       });
       page.prepend(originalBackground);
     }
-    page.classList.toggle('full_width_background', backgroundSize === 'full');
-  }, [background, backgroundSize, previewLoaded, profile]);
+    page.classList.toggle('full_width_background', backgroundIsAnimated || backgroundSize === 'full');
+  }, [background, backgroundIsAnimated, backgroundSize, previewLoaded, profile]);
 
   async function loadProfileByIdentifier(rawIdentifier: string, draft: ProjectDraft | null = null) {
     const nextIdentifier = rawIdentifier.trim();
@@ -673,6 +683,7 @@ export default function App() {
               {savedDraft && <button className="entry-resume" type="button" onClick={() => void loadProfileByIdentifier(savedDraft.profileIdentifier, savedDraft)} disabled={loading}><PanelsTopLeft size={15} /> Resume saved draft</button>}
               {loading && <span className="entry-loading"><LoaderCircle className="spin" size={13} /> Fetching profile</span>}
             </div>
+            <SiteDisclaimer />
           </div>
 
           <aside className="entry-tools" aria-label="Profile editor features">
@@ -774,11 +785,12 @@ export default function App() {
               <AvatarEditor sourceAvatar={profile.avatar} value={avatarEdit} onChange={setAvatarEdit} />
               <AvatarFramePicker sourceAvatar={avatarEdit.imageUrl || profile.avatar} sourceFrameImage={sourceAvatarFrameImage} value={avatarFrame} onChange={setAvatarFrame} />
               <ProfileThemePicker value={profileTheme} onApply={setProfileTheme} />
-              <BackgroundPicker sourceBackgroundImage={sourceBackgroundImage} value={background} onChange={setBackground} backgroundSize={backgroundSize} onBackgroundSizeChange={setBackgroundSize} />
+              <BackgroundPicker sourceBackgroundImage={sourceBackgroundImage} value={background} onChange={setBackground} backgroundSize={backgroundSize} onBackgroundSizeChange={setBackgroundSize} isAnimated={backgroundIsAnimated} />
               <section className="showcase-add-section" aria-label="Showcases">
                 <span className="source-label">Showcases</span>
                 <div className="showcase-add-slot" ref={setShowcaseAddTarget} />
               </section>
+              <SiteDisclaimer />
             </>
           )}
 
@@ -830,6 +842,7 @@ export default function App() {
                   sourceAvatarFrame.current = avatarFrameElement ? avatarFrameElement.cloneNode(true) as HTMLElement : null;
                   const poster = animatedBackground?.querySelector<HTMLVideoElement>('video')?.poster;
                   setSourceBackgroundImage(poster ? `url("${poster}")` : page ? getComputedStyle(page).backgroundImage : '');
+                  setSourceBackgroundAnimated(Boolean(animatedBackground));
                   setSourceAvatarFrameImage(avatarFrameImage?.currentSrc || avatarFrameImage?.src || '');
                   setShowcaseDocument(document || null);
                   setPreviewLoaded(true);
@@ -847,6 +860,7 @@ export default function App() {
                   profileUrl={profile?.url || ''}
                   profileName={profile?.name || 'steamcanvas'}
                   backgroundImageUrl={background?.imageUrl || sourceBackgroundImage}
+                  backgroundIsAnimated={backgroundIsAnimated}
                   backgroundSize={backgroundSize}
                   addControlTarget={showcaseAddTarget}
                   trashControlTarget={showcaseTrashTarget}
