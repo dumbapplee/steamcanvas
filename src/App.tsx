@@ -9,7 +9,7 @@ import BackgroundPicker, { type ProfileBackgroundSize, type SteamBackground } fr
 import ProfileThemePicker, { type AppliedProfileTheme } from './components/ProfileThemePicker';
 import ShowcaseEditor, { type RemovedShowcase } from './components/ShowcaseEditor';
 import SupportPopup from './components/SupportPopup';
-import GuidePage, { getGuideForPath } from './components/GuidePage';
+import GuideDialog from './components/GuidePage';
 import { ensureShowcaseArea } from './utils/showcaseArea';
 
 type ProfilePreview = {
@@ -260,6 +260,7 @@ export default function App() {
   const [sourceAvatarFrameImage, setSourceAvatarFrameImage] = useState('');
   const [showcaseDocument, setShowcaseDocument] = useState<Document | null>(null);
   const [showcaseAddTarget, setShowcaseAddTarget] = useState<HTMLDivElement | null>(null);
+  const [guideSlug, setGuideSlug] = useState<string | null>(null);
   const [showcaseTrashTarget, setShowcaseTrashTarget] = useState<HTMLDivElement | null>(null);
   const [removedShowcases, setRemovedShowcases] = useState<RemovedShowcase[]>([]);
   const [previewLoaded, setPreviewLoaded] = useState(false);
@@ -624,9 +625,6 @@ export default function App() {
     };
   }, [profile, previewLoaded, showcaseDocument, avatarEdit, avatarFrame, background, backgroundSize, profileTheme, previewLevel, removedShowcases]);
 
-  const guide = getGuideForPath(globalThis.location.pathname);
-  if (guide) return <GuidePage guide={guide} />;
-
   return (
     <main className={`app-shell${profile ? ' has-profile' : ''}`}>
       <header className="topbar">
@@ -638,7 +636,7 @@ export default function App() {
           <a className="author-credit" href="https://github.com/dumbapplee" target="_blank" rel="noreferrer">by dumbapplee</a>
         </div>
         <nav className="topbar-actions" aria-label="Site navigation">
-          <a className="topbar-link" href="/guides/featured-artwork">Guides</a>
+          <button className="topbar-link guide-trigger" type="button" aria-haspopup="dialog" onClick={() => setGuideSlug('featured-artwork')}>Guides</button>
           <button className="topbar-link changelog-trigger" type="button" aria-label="Open changelog" aria-haspopup="dialog" onClick={() => {
             changelogDialog.current?.showModal();
             if (changelogSeen) return;
@@ -899,6 +897,7 @@ export default function App() {
           <footer className="changelog-footer">A retrospective of SteamCanvas updates, based on the project history.</footer>
         </section>
       </dialog>
+      <GuideDialog slug={guideSlug} onSlugChange={setGuideSlug} onClose={() => setGuideSlug(null)} />
     </main>
   );
 }
