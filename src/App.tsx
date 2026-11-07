@@ -11,6 +11,7 @@ import ShowcaseEditor, { type RemovedShowcase } from './components/ShowcaseEdito
 import SupportPopup from './components/SupportPopup';
 import GuideDialog from './components/GuidePage';
 import { ensureShowcaseArea } from './utils/showcaseArea';
+import { dehydrateArtworkUrls, getArtworkBlob, hydrateArtworkUrls, listArtworkAssetIds } from './utils/artworkAssets';
 
 type ProfilePreview = {
   name: string;
@@ -54,6 +55,9 @@ type ProjectDraft = {
 const projectDatabaseName = 'steamcanvas-projects';
 const projectStoreName = 'drafts';
 const autosaveKey = 'autosave';
+// Artwork files placed in showcases, keyed by asset id. The draft refers to them as steamcanvas-asset:<id>
+// (utils/artworkAssets.ts) instead of holding the images as data URLs.
+const assetStoreName = 'assets';
 let projectDatabase: Promise<IDBDatabase> | null = null;
 
 const changelogSeenKey = 'steamcanvas-changelog-seen';
@@ -132,8 +136,12 @@ const changelogEntries = [
 function openProjectDatabase(): Promise<IDBDatabase> {
   if (!projectDatabase) {
     projectDatabase = new Promise((resolve, reject) => {
-      const request = indexedDB.open(projectDatabaseName, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore(projectStoreName);
+      const request = indexedDB.open(projectDatabaseName, 2);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(projectStoreName)) database.createObjectStore(projectStoreName);
+        if (!database.objectStoreNames.contains(assetStoreName)) database.createObjectStore(assetStoreName);
+      };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error('Could not open local project storage.'));
     });
@@ -150,11 +158,43 @@ async function readProjectDraft(): Promise<ProjectDraft | null> {
   });
 }
 
+/** Swaps a saved draft's asset tokens (and any base64 images from older drafts) for blob URLs. */
+async function hydrateProjectDraft(draft: ProjectDraft): Promise<ProjectDraft> {
+  const ids = listArtworkAssetIds(draft.showcaseAreaHtml);
+  const blobs = new Map<string, Blob>();
+  if (ids.length) {
+    const database = await openProjectDatabase();
+    const assets = database.transaction(assetStoreName, 'readonly').objectStore(assetStoreName);
+    await Promise.all(ids.map((id) => new Promise<void>((resolve) => {
+      const request = assets.get(id);
+      request.onsuccess = () => {
+        if (request.result instanceof Blob) blobs.set(id, request.result);
+        resolve();
+      };
+      request.onerror = () => resolve();
+    })));
+  }
+  return { ...draft, showcaseAreaHtml: await hydrateArtworkUrls(draft.showcaseAreaHtml, blobs) };
+}
+
+/** Saves the draft; its artwork files are written once and dropped when the draft no longer uses them. */
 async function writeProjectDraft(draft: ProjectDraft): Promise<void> {
   const database = await openProjectDatabase();
+  const assetIds = listArtworkAssetIds(draft.showcaseAreaHtml);
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(projectStoreName, 'readwrite');
+    const transaction = database.transaction([projectStoreName, assetStoreName], 'readwrite');
     transaction.objectStore(projectStoreName).put(draft, autosaveKey);
+    const assets = transaction.objectStore(assetStoreName);
+    const storedKeys = assets.getAllKeys();
+    storedKeys.onsuccess = () => {
+      const stored = new Set(storedKeys.result.map(String));
+      const referenced = new Set(assetIds);
+      for (const id of assetIds) {
+        const blob = getArtworkBlob(id);
+        if (!stored.has(id) && blob) assets.put(blob, id);
+      }
+      for (const id of stored) if (!referenced.has(id)) assets.delete(id);
+    };
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error || new Error('Could not save the project locally.'));
     transaction.onabort = () => reject(transaction.error || new Error('Could not save the project locally.'));
@@ -494,6 +534,9 @@ export default function App() {
     sourceThemeVariables.current = {};
 
     try {
+      // The draft's artwork files are read from storage while the profile downloads.
+      const hydrating = draft ? hydrateProjectDraft(draft) : null;
+      hydrating?.catch(() => undefined);
       const response = await fetch('/api/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -501,6 +544,7 @@ export default function App() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Could not load this profile.');
+      if (hydrating) pendingDraft.current = await hydrating;
       const loadedProfile = result as ProfilePreview;
       setProfile(loadedProfile);
       if (!draft) setPreviewLevel(loadedProfile.level ?? 0);
@@ -524,7 +568,8 @@ export default function App() {
       format: 'steamcanvas-project',
       version: 1,
       profileIdentifier: profile.url,
-      showcaseAreaHtml: serializeShowcaseArea(document),
+      // Placed artwork is kept as blob URLs; the draft stores asset tokens and the files separately.
+      showcaseAreaHtml: dehydrateArtworkUrls(serializeShowcaseArea(document)).html,
       removedShowcases,
       settings: { avatarEdit, avatarFrame, background, backgroundSize, profileTheme, previewLevel },
     };
