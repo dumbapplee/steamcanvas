@@ -11,7 +11,7 @@ import ShowcaseEditor, { type RemovedShowcase } from './components/ShowcaseEdito
 import SupportPopup from './components/SupportPopup';
 import GuideDialog from './components/GuidePage';
 import { ensureShowcaseArea } from './utils/showcaseArea';
-import { dehydrateArtworkUrls, getArtworkBlob, hydrateArtworkUrls, listArtworkAssetIds } from './utils/artworkAssets';
+import { dehydrateArtworkUrls, hydrateArtworkUrls, listArtworkAssetIds, scheduleArtworkSweep, setArtworkRoots, sweepArtwork } from './utils/artworkAssets';
 
 type ProfilePreview = {
   name: string;
@@ -59,6 +59,8 @@ const autosaveKey = 'autosave';
 // (utils/artworkAssets.ts) instead of holding the images as data URLs.
 const assetStoreName = 'assets';
 let projectDatabase: Promise<IDBDatabase> | null = null;
+// Told when an older SteamCanvas tab keeps the previous database version open and the upgrade waits.
+let onProjectStorageBlocked: (() => void) | null = null;
 
 const changelogSeenKey = 'steamcanvas-changelog-seen';
 
@@ -142,8 +144,21 @@ function openProjectDatabase(): Promise<IDBDatabase> {
         if (!database.objectStoreNames.contains(projectStoreName)) database.createObjectStore(projectStoreName);
         if (!database.objectStoreNames.contains(assetStoreName)) database.createObjectStore(assetStoreName);
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error('Could not open local project storage.'));
+      // Another tab still has the previous version open; the upgrade waits until that tab closes it.
+      request.onblocked = () => onProjectStorageBlocked?.();
+      request.onsuccess = () => {
+        const database = request.result;
+        // Let a newer version of the app upgrade the database instead of being blocked by this tab.
+        database.onversionchange = () => {
+          database.close();
+          projectDatabase = null;
+        };
+        resolve(database);
+      };
+      request.onerror = () => {
+        projectDatabase = null;
+        reject(request.error || new Error('Could not open local project storage.'));
+      };
     });
   }
   return projectDatabase;
@@ -158,46 +173,91 @@ async function readProjectDraft(): Promise<ProjectDraft | null> {
   });
 }
 
-/** Swaps a saved draft's asset tokens (and any base64 images from older drafts) for blob URLs. */
-async function hydrateProjectDraft(draft: ProjectDraft): Promise<ProjectDraft> {
-  const ids = listArtworkAssetIds(draft.showcaseAreaHtml);
-  const blobs = new Map<string, Blob>();
-  if (ids.length) {
-    const database = await openProjectDatabase();
-    const assets = database.transaction(assetStoreName, 'readonly').objectStore(assetStoreName);
-    await Promise.all(ids.map((id) => new Promise<void>((resolve) => {
-      const request = assets.get(id);
-      request.onsuccess = () => {
-        if (request.result instanceof Blob) blobs.set(id, request.result);
-        resolve();
-      };
-      request.onerror = () => resolve();
-    })));
-  }
-  return { ...draft, showcaseAreaHtml: await hydrateArtworkUrls(draft.showcaseAreaHtml, blobs) };
+type ProjectSnapshot = { draft: ProjectDraft; blobs: Map<string, Blob> };
+
+/** Asset ids in the showcase area and in removed showcases, which can be restored from the trash. */
+function draftAssetIds(draft: ProjectDraft): string[] {
+  const html = [draft.showcaseAreaHtml, ...(draft.removedShowcases || []).map((showcase) => showcase.html)];
+  return [...new Set(html.flatMap(listArtworkAssetIds))];
 }
 
-/** Saves the draft; its artwork files are written once and dropped when the draft no longer uses them. */
-async function writeProjectDraft(draft: ProjectDraft): Promise<void> {
+/**
+ * The saved draft and every file it refers to, read in one transaction. Reading them separately let another
+ * tab's save replace the draft and delete its files in between, so the images came back broken.
+ */
+async function readProjectSnapshot(): Promise<ProjectSnapshot | null> {
   const database = await openProjectDatabase();
-  const assetIds = listArtworkAssetIds(draft.showcaseAreaHtml);
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction([projectStoreName, assetStoreName], 'readonly');
+    const blobs = new Map<string, Blob>();
+    let draft: ProjectDraft | null = null;
+    const request = transaction.objectStore(projectStoreName).get(autosaveKey);
+    request.onsuccess = () => {
+      if (!isProjectDraft(request.result)) return;
+      draft = request.result;
+      const assets = transaction.objectStore(assetStoreName);
+      for (const id of draftAssetIds(draft)) {
+        const asset = assets.get(id);
+        asset.onsuccess = () => {
+          if (asset.result instanceof Blob) blobs.set(id, asset.result);
+        };
+      }
+    };
+    transaction.oncomplete = () => resolve(draft ? { draft, blobs } : null);
+    transaction.onerror = () => reject(transaction.error || new Error('Could not read the saved project.'));
+    transaction.onabort = () => reject(transaction.error || new Error('Could not read the saved project.'));
+  });
+}
+
+/**
+ * Swaps a saved draft's asset tokens (and any base64 images from older drafts) for blob URLs, in the
+ * showcase area and in removed showcases. Rejects if a file is missing rather than restore broken images.
+ */
+async function hydrateProjectDraft({ draft, blobs }: ProjectSnapshot): Promise<ProjectDraft> {
+  const [showcaseAreaHtml, ...removedHtml] = await Promise.all([
+    hydrateArtworkUrls(draft.showcaseAreaHtml, blobs),
+    ...(draft.removedShowcases || []).map((showcase) => hydrateArtworkUrls(showcase.html, blobs)),
+  ]);
+  return {
+    ...draft,
+    showcaseAreaHtml,
+    ...(draft.removedShowcases ? { removedShowcases: draft.removedShowcases.map((showcase, index) => ({ ...showcase, html: removedHtml[index] })) } : {}),
+  };
+}
+
+/**
+ * Saves the draft; its artwork files are written once and dropped when the draft no longer uses them.
+ * `files` holds the blobs captured when the draft was made. A referenced file that is neither stored
+ * nor captured aborts the save, so a draft with broken images never replaces a good one.
+ */
+async function writeProjectDraft(draft: ProjectDraft, files: Map<string, Blob>): Promise<void> {
+  const database = await openProjectDatabase();
+  const assetIds = draftAssetIds(draft);
   return new Promise((resolve, reject) => {
     const transaction = database.transaction([projectStoreName, assetStoreName], 'readwrite');
-    transaction.objectStore(projectStoreName).put(draft, autosaveKey);
+    let missing = 0;
     const assets = transaction.objectStore(assetStoreName);
     const storedKeys = assets.getAllKeys();
     storedKeys.onsuccess = () => {
       const stored = new Set(storedKeys.result.map(String));
       const referenced = new Set(assetIds);
+      missing = assetIds.filter((id) => !stored.has(id) && !files.has(id)).length;
+      if (missing) {
+        transaction.abort();
+        return;
+      }
+      transaction.objectStore(projectStoreName).put(draft, autosaveKey);
       for (const id of assetIds) {
-        const blob = getArtworkBlob(id);
+        const blob = files.get(id);
         if (!stored.has(id) && blob) assets.put(blob, id);
       }
       for (const id of stored) if (!referenced.has(id)) assets.delete(id);
     };
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error || new Error('Could not save the project locally.'));
-    transaction.onabort = () => reject(transaction.error || new Error('Could not save the project locally.'));
+    transaction.onabort = () => reject(missing
+      ? new Error(`Autosave skipped: ${missing} image${missing === 1 ? ' is' : 's are'} missing.`)
+      : transaction.error || new Error('Could not save the project locally.'));
   });
 }
 
@@ -307,11 +367,16 @@ export default function App() {
   const [previewRevision, setPreviewRevision] = useState(0);
   const [projectStatus, setProjectStatus] = useState('Autosave ready');
   const [savedDraft, setSavedDraft] = useState<ProjectDraft | null>(null);
+  // The status bar is not shown before a profile loads, so a blocked database upgrade is explained here.
+  const [storageBlocked, setStorageBlocked] = useState(false);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const changelogDialog = useRef<HTMLDialogElement>(null);
   const [changelogSeen, setChangelogSeen] = useState(() => readChangelogSeen() === changelogEntries[0].date);
   const exportAssetsRef = useRef<(() => Promise<void>) | null>(null);
   const pendingDraft = useRef<ProjectDraft | null>(null);
+  // Read by the artwork sweep, which runs outside React's render cycle.
+  const artworkRoots = useRef<{ document: Document | null; removed: RemovedShowcase[] }>({ document: null, removed: [] });
+  artworkRoots.current = { document: showcaseDocument, removed: removedShowcases };
   const identifierRef = useRef('');
   const sourceBackgroundStyle = useRef<string | null>(null);
   const sourceBackgroundVideo = useRef<HTMLElement | null>(null);
@@ -505,7 +570,8 @@ export default function App() {
     page.classList.toggle('full_width_background', backgroundIsAnimated || backgroundSize === 'full');
   }, [background, backgroundIsAnimated, backgroundSize, previewLoaded, profile]);
 
-  async function loadProfileByIdentifier(rawIdentifier: string, draft: ProjectDraft | null = null) {
+  async function loadProfileByIdentifier(rawIdentifier: string, snapshot: ProjectSnapshot | null = null) {
+    const draft = snapshot?.draft ?? null;
     const nextIdentifier = rawIdentifier.trim();
     if (!nextIdentifier || loading) return;
 
@@ -514,11 +580,11 @@ export default function App() {
     setLoading(true);
     setError('');
     setProjectStatus(draft ? 'Restoring project' : 'Autosave ready');
-    pendingDraft.current = draft;
+    pendingDraft.current = null;
     setProfile(null);
     setPreviewLoaded(false);
     setShowcaseDocument(null);
-    setRemovedShowcases(draft?.removedShowcases || []);
+    setRemovedShowcases([]);
     setAvatarEdit(draft?.settings.avatarEdit || DEFAULT_AVATAR_EDIT);
     setAvatarFrame(draft?.settings.avatarFrame || null);
     setBackground(draft?.settings.background || null);
@@ -535,7 +601,7 @@ export default function App() {
 
     try {
       // The draft's artwork files are read from storage while the profile downloads.
-      const hydrating = draft ? hydrateProjectDraft(draft) : null;
+      const hydrating = snapshot ? hydrateProjectDraft(snapshot) : null;
       hydrating?.catch(() => undefined);
       const response = await fetch('/api/profile', {
         method: 'POST',
@@ -544,7 +610,11 @@ export default function App() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Could not load this profile.');
-      if (hydrating) pendingDraft.current = await hydrating;
+      if (hydrating) {
+        const restored = await hydrating;
+        pendingDraft.current = restored;
+        setRemovedShowcases(restored.removedShowcases || []);
+      }
       const loadedProfile = result as ProfilePreview;
       setProfile(loadedProfile);
       if (!draft) setPreviewLevel(loadedProfile.level ?? 0);
@@ -562,16 +632,46 @@ export default function App() {
     await loadProfileByIdentifier(identifier);
   }
 
-  function createProjectDraft(document: Document): ProjectDraft {
+  /** Reads the saved draft again rather than the copy cached at startup: another tab may have replaced it. */
+  async function resumeSavedDraft() {
+    if (loading) return;
+    setError('');
+    setProjectStatus('Restoring project');
+    try {
+      const snapshot = await readProjectSnapshot();
+      setSavedDraft(snapshot?.draft ?? null);
+      if (!snapshot) {
+        setProjectStatus('No saved draft');
+        return;
+      }
+      await loadProfileByIdentifier(snapshot.draft.profileIdentifier, snapshot);
+    } catch (caught) {
+      setProjectStatus('Project restore failed');
+      setError(caught instanceof Error ? caught.message : 'Could not read the saved project.');
+    }
+  }
+
+  /** The draft with asset tokens in place of blob URLs, and the files those tokens refer to. */
+  function createProjectDraft(document: Document): { draft: ProjectDraft; files: Map<string, Blob> } {
     if (!profile) throw new Error('Load a profile before exporting a project.');
+    const files = new Map<string, Blob>();
+    const dehydrate = (html: string) => {
+      const result = dehydrateArtworkUrls(html);
+      for (const [id, blob] of result.assets) files.set(id, blob);
+      return result.html;
+    };
     return {
-      format: 'steamcanvas-project',
-      version: 1,
-      profileIdentifier: profile.url,
-      // Placed artwork is kept as blob URLs; the draft stores asset tokens and the files separately.
-      showcaseAreaHtml: dehydrateArtworkUrls(serializeShowcaseArea(document)).html,
-      removedShowcases,
-      settings: { avatarEdit, avatarFrame, background, backgroundSize, profileTheme, previewLevel },
+      draft: {
+        format: 'steamcanvas-project',
+        version: 1,
+        profileIdentifier: profile.url,
+        // Placed artwork is kept as blob URLs; the draft stores asset tokens and the files separately.
+        showcaseAreaHtml: dehydrate(serializeShowcaseArea(document)),
+        // Removed originals can be restored from the trash after a reload, so their artwork is kept too.
+        removedShowcases: removedShowcases.map((showcase) => ({ ...showcase, html: dehydrate(showcase.html) })),
+        settings: { avatarEdit, avatarFrame, background, backgroundSize, profileTheme, previewLevel },
+      },
+      files,
     };
   }
 
@@ -614,7 +714,13 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    onProjectStorageBlocked = () => {
+      if (!active) return;
+      setStorageBlocked(true);
+      setProjectStatus('Close other SteamCanvas tabs to use local autosave');
+    };
     void readProjectDraft().then((draft) => {
+      if (active) setStorageBlocked(false);
       if (!active || identifierRef.current) return;
       if (draft && isProjectDraft(draft)) {
         setSavedDraft(draft);
@@ -625,7 +731,23 @@ export default function App() {
     }).catch(() => {
       if (active) setProjectStatus('Local autosave unavailable');
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      onProjectStorageBlocked = null;
+    };
+  }, []);
+
+  // Placed artwork that neither the preview nor the trash refers to any more is released from memory.
+  useEffect(() => {
+    setArtworkRoots(() => {
+      const { document, removed } = artworkRoots.current;
+      return [document?.body?.innerHTML || '', ...removed.map((showcase) => showcase.html)];
+    });
+    const interval = globalThis.setInterval(sweepArtwork, 15_000);
+    return () => {
+      globalThis.clearInterval(interval);
+      setArtworkRoots(null);
+    };
   }, []);
 
   useEffect(() => {
@@ -635,12 +757,13 @@ export default function App() {
       globalThis.clearTimeout(timer);
       timer = globalThis.setTimeout(() => {
         try {
-          const draft = createProjectDraft(showcaseDocument);
+          const { draft, files } = createProjectDraft(showcaseDocument);
           setProjectStatus('Saving draft');
-          void writeProjectDraft(draft).then(() => {
+          void writeProjectDraft(draft, files).then(() => {
             setSavedDraft(draft);
             setProjectStatus('Draft saved locally');
-          }).catch(() => setProjectStatus('Autosave failed'));
+            scheduleArtworkSweep();
+          }).catch((caught) => setProjectStatus(caught instanceof Error && caught.message.startsWith('Autosave') ? caught.message : 'Autosave failed'));
         } catch {
           setProjectStatus('Autosave failed');
         }
@@ -723,8 +846,9 @@ export default function App() {
               {error ? <p className="entry-error" role="alert">{error}</p> : <p className="entry-hint"><ShieldCheck size={14} /> Public profiles only <span /> SteamID64, custom name, or profile URL</p>}
             </form>
             <div className="entry-actions">
-              {savedDraft && <button className="entry-resume" type="button" onClick={() => void loadProfileByIdentifier(savedDraft.profileIdentifier, savedDraft)} disabled={loading}><PanelsTopLeft size={15} /> Resume saved draft</button>}
+              {savedDraft && <button className="entry-resume" type="button" onClick={() => void resumeSavedDraft()} disabled={loading}><PanelsTopLeft size={15} /> Resume saved draft</button>}
               {loading && <span className="entry-loading"><LoaderCircle className="spin" size={13} /> Fetching profile</span>}
+              {storageBlocked && !loading && <span className="entry-loading" role="status">Close other SteamCanvas tabs to load your saved draft</span>}
             </div>
             <SiteDisclaimer />
           </div>

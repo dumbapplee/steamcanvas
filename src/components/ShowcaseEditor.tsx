@@ -8,7 +8,7 @@ import type { ProfileBackgroundSize } from './BackgroundPicker';
 import { Camera, ChevronLeft, ChevronRight, Download, GripHorizontal, Hammer, ImagePlus, LoaderCircle, Pencil, Plus, RotateCcw, Search, Star, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import { decompressFrame, parseGIF, type ParsedFrame, type ParsedGif } from 'gifuct-js';
-import { canvasToArtworkUrl, createArtworkUrl, isLocalImageUrl, localImageSubtype } from '../utils/artworkAssets';
+import { canvasToArtworkUrl, collectBlobUrls, createArtworkUrl, isLocalImageUrl, localImageSubtype, retainArtworkUrls, setArtworkBusy } from '../utils/artworkAssets';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 
 type ShowcaseKind = 'artwork' | 'featured-artwork' | 'screenshot' | 'workshop' | 'other';
@@ -977,6 +977,22 @@ export default function ShowcaseEditor({ previewDocument, profileUrl, profileNam
 	const backgroundImageUrlRef = useRef(backgroundImageUrl);
 	backgroundImageUrlRef.current = backgroundImageUrl;
 	const suppressClickRef = useRef(false);
+
+	// Artwork in editor state (export files, mosaic sources, and the open editor's previews) is kept in memory
+	// while it is used; the rest is released by the sweep in utils/artworkAssets.ts. A closed editor's
+	// previews stay in state until it opens again, so they only count while it is open. Nothing is released
+	// while work runs.
+	useEffect(() => {
+		const previews = editingId ? [workshopRowPreviews, editorPreview, uploadButtonPreview] : [];
+		retainArtworkUrls('showcase-editor', collectBlobUrls([entries, previews]));
+	}, [entries, editingId, workshopRowPreviews, editorPreview, uploadButtonPreview]);
+	useEffect(() => {
+		setArtworkBusy('showcase-editor', editorLoading || !!exportingShowcaseId || !!backgroundResizingId);
+	}, [editorLoading, exportingShowcaseId, backgroundResizingId]);
+	useEffect(() => () => {
+		retainArtworkUrls('showcase-editor', []);
+		setArtworkBusy('showcase-editor', false);
+	}, []);
 
 	function createOverlayHost(document: Document, parent: HTMLElement, name: string): HTMLElement {
 		if (document.defaultView?.getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
