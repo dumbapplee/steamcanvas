@@ -756,6 +756,11 @@ export default function App() {
     const saveDraft = () => {
       globalThis.clearTimeout(timer);
       timer = globalThis.setTimeout(() => {
+        // A save now would wait on the blocked database and hide why; this effect saves again once it opens.
+        if (storageBlocked) {
+          setProjectStatus('Close other SteamCanvas tabs to use local autosave');
+          return;
+        }
         try {
           const { draft, files } = createProjectDraft(showcaseDocument);
           setProjectStatus('Saving draft');
@@ -791,7 +796,7 @@ export default function App() {
       globalThis.clearTimeout(timer);
       observer.disconnect();
     };
-  }, [profile, previewLoaded, showcaseDocument, avatarEdit, avatarFrame, background, backgroundSize, profileTheme, previewLevel, removedShowcases]);
+  }, [profile, previewLoaded, showcaseDocument, avatarEdit, avatarFrame, background, backgroundSize, profileTheme, previewLevel, removedShowcases, storageBlocked]);
 
   return (
     <main className={`app-shell${profile ? ' has-profile' : ''}`}>
