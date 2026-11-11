@@ -11,7 +11,7 @@ import ShowcaseEditor, { type RemovedShowcase } from './components/ShowcaseEdito
 import SupportPopup from './components/SupportPopup';
 import GuideDialog from './components/GuidePage';
 import { ensureShowcaseArea } from './utils/showcaseArea';
-import { dehydrateArtworkUrls, hydrateArtworkUrls, listArtworkAssetIds, scheduleArtworkSweep, setArtworkRoots, sweepArtwork } from './utils/artworkAssets';
+import { dehydrateArtworkUrls, hydrateArtworkUrls, listArtworkAssetIds, scheduleArtworkSweep, setArtworkBusy, setArtworkRoots, sweepArtwork } from './utils/artworkAssets';
 
 type ProfilePreview = {
   name: string;
@@ -374,6 +374,8 @@ export default function App() {
   const [changelogSeen, setChangelogSeen] = useState(() => readChangelogSeen() === changelogEntries[0].date);
   const exportAssetsRef = useRef<(() => Promise<void>) | null>(null);
   const pendingDraft = useRef<ProjectDraft | null>(null);
+  // Set the moment a load starts, unlike the `loading` state, so a second load cannot slip in while the first awaits.
+  const loadGuard = useRef(false);
   // Read by the artwork sweep, which runs outside React's render cycle.
   const artworkRoots = useRef<{ document: Document | null; removed: RemovedShowcase[] }>({ document: null, removed: [] });
   artworkRoots.current = { document: showcaseDocument, removed: removedShowcases };
@@ -570,17 +572,45 @@ export default function App() {
     page.classList.toggle('full_width_background', backgroundIsAnimated || backgroundSize === 'full');
   }, [background, backgroundIsAnimated, backgroundSize, previewLoaded, profile]);
 
-  async function loadProfileByIdentifier(rawIdentifier: string, snapshot: ProjectSnapshot | null = null) {
-    const draft = snapshot?.draft ?? null;
-    const nextIdentifier = rawIdentifier.trim();
-    if (!nextIdentifier || loading) return;
+  function beginLoad() {
+    if (loadGuard.current) return false;
+    loadGuard.current = true;
+    setLoading(true);
+    return true;
+  }
 
+  function endLoad() {
+    loadGuard.current = false;
+    setLoading(false);
+  }
+
+  /**
+   * The restored draft waiting for the preview to load. Its artwork is only in this draft until then,
+   * so the artwork sweep is held off while one is pending.
+   */
+  function setPendingDraft(draft: ProjectDraft | null) {
+    pendingDraft.current = draft;
+    setArtworkBusy('restore', !!draft);
+  }
+
+  async function loadProfileByIdentifier(rawIdentifier: string, snapshot: ProjectSnapshot | null = null) {
+    const nextIdentifier = rawIdentifier.trim();
+    if (!nextIdentifier || !beginLoad()) return;
+    try {
+      await runProfileLoad(nextIdentifier, snapshot);
+    } finally {
+      endLoad();
+    }
+  }
+
+  /** Loads a profile, and restores a draft over it when given one. The caller holds the load guard. */
+  async function runProfileLoad(nextIdentifier: string, snapshot: ProjectSnapshot | null) {
+    const draft = snapshot?.draft ?? null;
     identifierRef.current = nextIdentifier;
     setIdentifier(nextIdentifier);
-    setLoading(true);
     setError('');
     setProjectStatus(draft ? 'Restoring project' : 'Autosave ready');
-    pendingDraft.current = null;
+    setPendingDraft(null);
     setProfile(null);
     setPreviewLoaded(false);
     setShowcaseDocument(null);
@@ -600,7 +630,8 @@ export default function App() {
     sourceThemeVariables.current = {};
 
     try {
-      // The draft's artwork files are read from storage while the profile downloads.
+      // The draft's artwork files are read from storage while the profile downloads; nothing else refers to them yet.
+      if (snapshot) setArtworkBusy('restore', true);
       const hydrating = snapshot ? hydrateProjectDraft(snapshot) : null;
       hydrating?.catch(() => undefined);
       const response = await fetch('/api/profile', {
@@ -612,18 +643,16 @@ export default function App() {
       if (!response.ok) throw new Error(result.error || 'Could not load this profile.');
       if (hydrating) {
         const restored = await hydrating;
-        pendingDraft.current = restored;
+        setPendingDraft(restored);
         setRemovedShowcases(restored.removedShowcases || []);
       }
       const loadedProfile = result as ProfilePreview;
       setProfile(loadedProfile);
       if (!draft) setPreviewLevel(loadedProfile.level ?? 0);
     } catch (caught) {
-      pendingDraft.current = null;
+      setPendingDraft(null);
       if (draft) setProjectStatus('Project restore failed');
       setError(caught instanceof Error ? caught.message : 'Something went wrong while loading the profile.');
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -634,7 +663,7 @@ export default function App() {
 
   /** Reads the saved draft again rather than the copy cached at startup: another tab may have replaced it. */
   async function resumeSavedDraft() {
-    if (loading) return;
+    if (!beginLoad()) return;
     setError('');
     setProjectStatus('Restoring project');
     try {
@@ -644,10 +673,13 @@ export default function App() {
         setProjectStatus('No saved draft');
         return;
       }
-      await loadProfileByIdentifier(snapshot.draft.profileIdentifier, snapshot);
+      const nextIdentifier = snapshot.draft.profileIdentifier.trim();
+      if (nextIdentifier) await runProfileLoad(nextIdentifier, snapshot);
     } catch (caught) {
       setProjectStatus('Project restore failed');
       setError(caught instanceof Error ? caught.message : 'Could not read the saved project.');
+    } finally {
+      endLoad();
     }
   }
 
@@ -687,11 +719,11 @@ export default function App() {
   }
 
   function resetProfilePreview() {
-    if (!profile || !previewLoaded || loading) return;
+    if (!profile || !previewLoaded || loadGuard.current) return;
     const confirmed = globalThis.confirm('Reset this preview to the loaded Steam profile? All showcase edits and appearance changes will be discarded.');
     if (!confirmed) return;
 
-    pendingDraft.current = null;
+    setPendingDraft(null);
     setPreviewLoaded(false);
     setShowcaseDocument(null);
     setAvatarEdit(DEFAULT_AVATAR_EDIT);
@@ -991,7 +1023,7 @@ export default function App() {
                   const restoredDraft = pendingDraft.current;
                   if (document && restoredDraft) {
                     restoreShowcaseArea(document, restoredDraft.showcaseAreaHtml);
-                    pendingDraft.current = null;
+                    setPendingDraft(null);
                   }
                   if (document && !document.querySelector('#steamcanvas-hide-video-controls')) {
                     const style = document.createElement('style');
